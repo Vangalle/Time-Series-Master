@@ -146,6 +146,17 @@ with st.sidebar:
         
         if st.button("Refresh Custom Metrics"):
             st.rerun()
+    
+    with st.sidebar.expander("Custom Losses"):
+        st.write("Add your custom loss .py files to the 'custom_losses' directory.")
+        
+        if st.button("Create Example Loss File"):
+            from custom_loss_loader import create_example_loss_file
+            example_file = create_example_loss_file()
+            st.success(f"Created example loss file: {example_file}")
+        
+        if st.button("Refresh Custom Losses"):
+            st.rerun()
 
 # Main content area
 if st.session_state.page == "home":

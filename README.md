@@ -184,8 +184,9 @@ After training, you can:
 
 1. Create a Python file in the `custom_models` directory
 2. Define a class that inherits from `torch.nn.Module`
-3. Include docstring with the keyword "linear model" if it's a linear model (otherwise it's treated as a deep learning model)
-4. Implement `__init__` and `forward` methods following PyTorch conventions
+3. **(important!) Include docstring with the keyword "linear model" if it's a linear model (otherwise it's treated as a deep learning model)**
+4. **(important!) Include docstring or class name with the keyword "transformer" if it's using multi-head attention.**
+5. Implement `__init__` and `forward` methods following PyTorch conventions
 
 Example model structure:
 ```python

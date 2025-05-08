@@ -8,7 +8,7 @@ import torch
 import pickle
 from datetime import datetime
 from pathlib import Path
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, mean_absolute_percentage_error
 
 # Import custom metrics loader
 from custom_metrics_loader import load_custom_metrics, get_metric_info
@@ -16,6 +16,24 @@ from custom_metrics_loader import load_custom_metrics, get_metric_info
 # Function to denormalize the predictions and actual values
 def denormalize_data(data, mean, std):
     return data * std + mean
+
+def smape_calculator(y_true, y_pred):
+    """
+    Calculate Symmetric Mean Absolute Percentage Error (SMAPE)
+    
+    Parameters:
+    y_true (np.array): Array of true values
+    y_pred (np.array): Array of predicted values
+    epsilon (float): A small value to avoid division by zero
+    
+    Returns:
+    float: SMAPE value
+    """
+    # Ensure the epsilon is used to avoid division by zero
+    denominator = (np.abs(y_true) + np.abs(y_pred)) / 2
+    
+    smape_value = np.mean(np.abs(y_true - y_pred) / denominator)
+    return smape_value
 
 # Function to calculate various metrics
 def calculate_metrics(y_true, y_pred, custom_metrics=None):
@@ -42,10 +60,11 @@ def calculate_metrics(y_true, y_pred, custom_metrics=None):
     # Mean Absolute Error
     metrics['MAE'] = mean_absolute_error(y_true, y_pred)
     
-    # Mean Absolute Percentage Error (avoiding division by zero)
-    with np.errstate(divide='ignore', invalid='ignore'):
-        mape = np.mean(np.abs((y_true - y_pred) / np.maximum(np.abs(y_true), 1e-10)) * 100)
-        metrics['MAPE'] = mape if not np.isinf(mape) and not np.isnan(mape) else float('nan')
+    # Mean Absolute Percentage Error
+    metrics['MAPE'] = mean_absolute_percentage_error(y_true, y_pred)
+    
+    # Symmetric Mean Absolute Percentage Error
+    metrics['SMAPE'] = smape_calculator(y_true, y_pred)
     
     # R-squared (Coefficient of Determination)
     metrics['R²'] = r2_score(y_true, y_pred)
@@ -295,7 +314,7 @@ def run():
         st.subheader("Select Metrics")
         
         # Built-in metrics
-        builtin_metrics = ["MSE", "RMSE", "MAE", "MAPE", "R²"]
+        builtin_metrics = ["R²", "SMAPE", "MAPE", "RMSE", "MSE", "MAE"]
         selected_builtin_metrics = st.multiselect(
             "Select Built-in Metrics",
             builtin_metrics,
@@ -325,7 +344,9 @@ def run():
             elif metric == "MAE":
                 metrics_dict[metric] = lambda y_true, y_pred: mean_absolute_error(y_true, y_pred)
             elif metric == "MAPE":
-                metrics_dict[metric] = lambda y_true, y_pred: np.mean(np.abs((y_true - y_pred) / np.maximum(np.abs(y_true), 1e-10)) * 100)
+                metrics_dict[metric] = lambda y_true, y_pred: mean_absolute_percentage_error(y_true, y_pred)
+            elif metric == "SMAPE":
+                metrics_dict[metric] = lambda y_true, y_pred: smape_calculator(y_true, y_pred)
             elif metric == "R²":
                 metrics_dict[metric] = lambda y_true, y_pred: r2_score(y_true, y_pred)
         

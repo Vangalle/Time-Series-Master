@@ -107,68 +107,6 @@ def create_example_metrics_file():
     example_code = '''import numpy as np
 from sklearn.metrics import mean_absolute_percentage_error
 
-def metric_rmse(y_true, y_pred):
-    """Root Mean Squared Error (RMSE).
-    
-    Lower is better.
-    
-    Args:
-        y_true: Ground truth values
-        y_pred: Predicted values
-        
-    Returns:
-        float: RMSE value
-    """
-    return np.sqrt(np.mean((y_true - y_pred) ** 2))
-
-def metric_mape(y_true, y_pred):
-    """Mean Absolute Percentage Error (MAPE).
-    
-    Lower is better.
-    
-    Args:
-        y_true: Ground truth values
-        y_pred: Predicted values
-        
-    Returns:
-        float: MAPE value
-    """
-    return mean_absolute_percentage_error(y_true, y_pred)
-
-def metric_smape(y_true, y_pred):
-    """Symmetric Mean Absolute Percentage Error (SMAPE).
-    
-    Lower is better.
-    
-    Args:
-        y_true: Ground truth values
-        y_pred: Predicted values
-        
-    Returns:
-        float: SMAPE value
-    """
-    return 100 * np.mean(2.0 * np.abs(y_pred - y_true) / (np.abs(y_true) + np.abs(y_pred) + 1e-8))
-
-def metric_r2_score(y_true, y_pred):
-    """R-squared (Coefficient of Determination).
-    
-    Higher is better.
-    
-    Args:
-        y_true: Ground truth values
-        y_pred: Predicted values
-        
-    Returns:
-        float: R-squared value
-    """
-    ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
-    ss_res = np.sum((y_true - y_pred) ** 2)
-    
-    if ss_tot == 0:
-        return 0  # R² is undefined if data is constant
-    
-    return 1 - (ss_res / ss_tot)
-
 def metric_directional_accuracy(y_true, y_pred):
     """Directional Accuracy - measures ability to predict the direction of change.
     

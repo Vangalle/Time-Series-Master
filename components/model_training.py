@@ -13,11 +13,18 @@ import pickle
 import copy
 from pathlib import Path
 import platform
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, mean_absolute_percentage_error
 
 # Import custom model and metrics loaders
 from custom_model_loader import load_custom_models, get_model_info
 from custom_metrics_loader import load_custom_metrics, get_metric_info
+from custom_loss_loader import load_custom_losses, get_loss_info
+
+# Load custom losses
+custom_losses = load_custom_losses()
+loss_options = ["L2Loss", "L1Loss", "Huber"]
+if custom_losses:
+    loss_options.append("Custom Loss")
 
 # Default model definitions
 class SimpleRNN(nn.Module):
@@ -72,6 +79,9 @@ class GRU(nn.Module):
 class Transformer(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, num_layers, nhead=8, dropout=0.2):
         super(Transformer, self).__init__()
+        
+        # Ensure nhead divides hidden_dim
+        assert hidden_dim % nhead == 0, f"Hidden dimension ({hidden_dim}) must be divisible by num_heads ({nhead})"
         
         self.encoder_layer = nn.TransformerEncoderLayer(
             d_model=input_dim, 
@@ -421,36 +431,73 @@ def run():
                 )
                 
                 # Model depth selection
-                num_layers = st.slider("Number of Layers", 1, 10, 2)
+                num_layers = st.number_input("Number of Layers", min_value=1, max_value=20, value=2, step=1)
                 
                 # Hidden dimension selection
-                hidden_dim = st.selectbox(
-                    "Hidden Dimension",
-                    [64, 128, 256],
-                    index=1  # Default to 128
-                )
+                hidden_dim = st.number_input("Hidden Dimension", min_value=32, max_value=2048, value=64, step=32)
+
+                # If Transformer model is selected, add num_heads parameter
+                if dl_model_type == "Transformer":
+                    # Calculate valid divisors of hidden_dim
+                    divisors = [i for i in range(1, hidden_dim + 1) if hidden_dim % i == 0]
+                    
+                    # Default to a value close to 8 (common default) if possible
+                    default_index = min(range(len(divisors)), key=lambda i: abs(divisors[i] - 8))
+                    
+                    num_heads = st.selectbox(
+                        "Number of Attention Heads",
+                        options=divisors,
+                        index=default_index,
+                        help="For Transformer models, number of heads must divide the hidden dimension evenly."
+                    )
+                else:
+                    num_heads = 8  # Default value for other models (won't be used)
                 
                 # Input and output sequence length
-                input_length = st.slider("Input Sequence Length", 1, 100, 10)
-                output_length = st.slider("Output Sequence Length", 1, 50, 1)
+                input_length = st.number_input("Input Sequence Length", min_value=1, max_value=500, value=12, step=3)
+
+                output_length = st.number_input("Output Sequence Length", min_value=1, max_value=500, value=12, step=3)
+
                 
             with col2:
                 # Loss function selection
                 loss_function = st.selectbox(
                     "Loss Function",
-                    ["MSE", "MAE", "Huber"],
+                    loss_options,
                     index=0
                 )
+
+                selected_custom_loss = None
+                if loss_function == "Custom Loss":
+                    selected_custom_loss = st.selectbox(
+                        "Select Custom Loss",
+                        list(custom_losses.keys()),
+                        format_func=lambda x: x.split(".")[-1]  # Show class name only
+                    )
+                    
+                    # Display loss information
+                    if selected_custom_loss:
+                        loss_class = custom_losses[selected_custom_loss]
+                        loss_info = get_loss_info(loss_class)
+                        st.info(f"**Description:** {loss_info['description']}")
                 
                 # Dataset splits
-                train_ratio = st.slider("Training Set Ratio", 0.5, 0.9, 0.7, 0.05)
-                val_ratio = st.slider("Validation Set Ratio", 0.0, 0.3, 0.15, 0.05)
+                train_ratio = st.number_input("Training Set Ratio", min_value=0.1, max_value=0.9, value=0.8, step=0.05,
+                                              format="%.2f")
+
+                val_ratio = st.number_input("Validation Set Ratio", min_value=0.0, max_value=0.5, value=0.10, step=0.05, 
+                                            format="%.2f")
+                
                 test_ratio = 1.0 - train_ratio - val_ratio
                 st.write(f"Test Set Ratio: {test_ratio:.2f}")
                 
                 # Early stopping parameters
                 use_early_stopping = st.checkbox("Use Early Stopping", value=True)
-                patience = st.slider("Early Stopping Patience", 5, 50, 15) if use_early_stopping else 0
+                if use_early_stopping:
+                    patience = st.number_input("Early Stopping Patience", min_value=1, max_value=100,
+                                               value=15, step=1)
+                else:
+                    patience = 0
                 
                 # Learning rate scheduler
                 use_lr_scheduler = st.checkbox("Use Learning Rate Scheduler", value=True)
@@ -468,21 +515,14 @@ def run():
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                learning_rate = st.select_slider(
-                    "Learning Rate",
-                    options=[0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05],
-                    value=0.001
-                )
+                learning_rate = st.number_input("Learning Rate", min_value=0.0001, max_value=0.1, value=0.001, 
+                                                format="%.4f", step=0.0001)
                 
             with col2:
-                batch_size = st.select_slider(
-                    "Batch Size",
-                    options=[8, 16, 32, 64, 128, 256],
-                    value=32
-                )
+                batch_size = st.number_input("Batch Size", min_value=1, max_value=2048, value=64, step=64)
                 
             with col3:
-                epochs = st.slider("Maximum Epochs", 10, 500, 100)
+                epochs = st.number_input("Maximum Epochs", min_value=1, max_value=1000, value=100, step=20)
             
             deep_learning_model = {
                 "type": "deep_learning",
@@ -504,6 +544,9 @@ def run():
                 "epochs": epochs
             }
             
+            if dl_model_type == "Transformer":
+                deep_learning_model["num_heads"] = num_heads
+            
         with builtin_tabs[1]:  # Linear Models
             st.subheader("Linear Model Configuration")
             
@@ -516,41 +559,53 @@ def run():
             
             with col1:
                 # Input and output sequence length
-                input_length = st.slider("Input Sequence Length", 1, 100, 10, key="linear_input_length")
-                output_length = st.slider("Output Sequence Length", 1, 50, 1, key="linear_output_length")
+                input_length = st.number_input("Input Sequence Length", min_value=1, max_value=500,
+                                                value=12, step=3, key="linear_input_length")
+                output_length = st.number_input("Output Sequence Length", min_value=1, max_value=500,
+                                                value=12, step=3, key="linear_output_length")
                 
                 # Loss function selection
                 loss_function = st.selectbox(
                     "Loss Function",
-                    ["MSE", "MAE", "Huber"],
+                    loss_options,
                     index=0,
                     key="linear_loss"
                 )
                 
+                selected_custom_loss = None
+                if loss_function == "Custom Loss":
+                    selected_custom_loss = st.selectbox(
+                        "Select Custom Loss",
+                        list(custom_losses.keys()),
+                        format_func=lambda x: x.split(".")[-1]  # Show class name only
+                    )
+                    
+                    # Display loss information
+                    if selected_custom_loss:
+                        loss_class = custom_losses[selected_custom_loss]
+                        loss_info = get_loss_info(loss_class)
+                        st.info(f"**Description:** {loss_info['description']}")
+
             with col2:
                 # Dataset splits
-                train_ratio = st.slider("Training Set Ratio", 0.5, 0.9, 0.7, 0.05, key="linear_train_ratio")
-                val_ratio = st.slider("Validation Set Ratio", 0.0, 0.3, 0.15, 0.05, key="linear_val_ratio")
+                train_ratio = st.number_input("Training Set Ratio", min_value=0.5, max_value=0.9, value=0.8, step=0.05, key="linear_train_ratio")
+                val_ratio = st.number_input("Validation Set Ratio", min_value=0.0, max_value=0.3, value=0.1, step=0.05, key="linear_val_ratio")
                 test_ratio = 1.0 - train_ratio - val_ratio
                 st.write(f"Test Set Ratio: {test_ratio:.2f}")
-                
-                # Learning rate and batch size
-                learning_rate = st.select_slider(
-                    "Learning Rate",
-                    options=[0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05],
-                    value=0.01,
-                    key="linear_lr"
-                )
-                
-                batch_size = st.select_slider(
-                    "Batch Size",
-                    options=[8, 16, 32, 64, 128, 256],
-                    value=32,
-                    key="linear_batch"
-                )
             
-            # Training parameters
-            epochs = st.slider("Maximum Epochs", 10, 500, 100, key="linear_epochs")
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                # Learning rate and batch size
+                learning_rate = st.number_input("Learning Rate", min_value=0.0001, max_value=0.1, value=0.01, step=0.0001, 
+                                                format="%.4f", key="linear_lr_input")
+            
+            with col2:
+                batch_size = st.number_input("Batch Size", min_value=8, max_value=2048, value=64, step=64, key="linear_batch")
+            
+            with col3:
+                # Training parameters
+                epochs = st.number_input("Maximum Epochs", min_value=1, max_value=500, value=100, step=20, key="linear_epochs")
             
             linear_model = {
                 "type": "linear",
@@ -582,7 +637,7 @@ def run():
             
             custom_model_class = custom_models[custom_model_key]
             model_info = get_model_info(custom_model_class)
-            
+
             # Display model information
             st.write(f"**Model Type:** {model_info['type'].title()}")
             st.write(f"**Architecture:** {model_info['architecture'].title()}")
@@ -594,38 +649,75 @@ def run():
                 
                 with col1:
                     # Model depth selection
-                    num_layers = st.slider("Number of Layers", 1, 10, 2, key="custom_num_layers")
+                    num_layers = st.number_input("Number of Layers", min_value=1, max_value=20, value=2, step=1, 
+                                                 key="custom_num_layers")
                     
                     # Hidden dimension selection
-                    hidden_dim = st.selectbox(
-                        "Hidden Dimension",
-                        [64, 128, 256],
-                        index=1,
-                        key="custom_hidden_dim"
-                    )
-                    
+                    hidden_dim = st.number_input("Hidden Dimension", min_value=32, max_value=2048, value=64, step=32, 
+                                                 key="custom_hidden_dim_input")
+
+                    # If Transformer model is selected, add num_heads parameter
+                    if model_info['architecture'].title() == "Transformer":
+                        # Calculate valid divisors of hidden_dim
+                        divisors = [i for i in range(1, hidden_dim + 1) if hidden_dim % i == 0]
+                        
+                        # Default to a value close to 8 (common default) if possible
+                        default_index = min(range(len(divisors)), key=lambda i: abs(divisors[i] - 8))
+                        
+                        num_heads = st.selectbox(
+                            "Number of Attention Heads",
+                            options=divisors,
+                            index=default_index,
+                            help="For Transformer models, number of heads must divide the hidden dimension evenly."
+                        )
+                    else:
+                        num_heads = 8  # Default value for other models (won't be used)
+
                     # Input and output sequence length
-                    input_length = st.slider("Input Sequence Length", 1, 100, 10, key="custom_input_length")
-                    output_length = st.slider("Output Sequence Length", 1, 50, 1, key="custom_output_length")
+                    input_length = st.number_input("Input Sequence Length", min_value=1, max_value=500, value=12, 
+                                                   step=3, key="custom_input_length")
+
+                    output_length = st.number_input("Output Sequence Length", min_value=1, max_value=500, value=12, 
+                                                    step=3, key="custom_output_length")
                     
                 with col2:
                     # Loss function selection
                     loss_function = st.selectbox(
                         "Loss Function",
-                        ["MSE", "MAE", "Huber"],
+                        loss_options,
                         index=0,
                         key="custom_loss"
                     )
+
+                    selected_custom_loss = None
+                    if loss_function == "Custom Loss":
+                        selected_custom_loss = st.selectbox(
+                            "Select Custom Loss",
+                            list(custom_losses.keys()),
+                            format_func=lambda x: x.split(".")[-1]  # Show class name only
+                        )
+                        
+                        # Display loss information
+                        if selected_custom_loss:
+                            loss_class = custom_losses[selected_custom_loss]
+                            loss_info = get_loss_info(loss_class)
+                            st.info(f"**Description:** {loss_info['description']}")
                     
                     # Dataset splits
-                    train_ratio = st.slider("Training Set Ratio", 0.5, 0.9, 0.7, 0.05, key="custom_train_ratio")
-                    val_ratio = st.slider("Validation Set Ratio", 0.0, 0.3, 0.15, 0.05, key="custom_val_ratio")
+                    train_ratio = st.number_input("Training Set Ratio", min_value=0.1, max_value=0.9, value=0.8, 
+                                                  step=0.05, key="custom_train_ratio")
+                    val_ratio = st.number_input("Validation Set Ratio", min_value=0.0, max_value=0.3, value=0.1,
+                                                 step=0.05, key="custom_val_ratio")
                     test_ratio = 1.0 - train_ratio - val_ratio
                     st.write(f"Test Set Ratio: {test_ratio:.2f}")
                 
                 # Early stopping parameters
                 use_early_stopping = st.checkbox("Use Early Stopping", value=True, key="custom_early_stopping")
-                patience = st.slider("Early Stopping Patience", 5, 50, 15, key="custom_patience") if use_early_stopping else 0
+                if use_early_stopping:
+                    patience = st.number_input("Early Stopping Patience", min_value=1, max_value=100,
+                                               value=15, step=1, key="custom_patience")
+                else:
+                    patience = 0
                 
                 # Learning rate scheduler
                 use_lr_scheduler = st.checkbox("Use Learning Rate Scheduler", value=True, key="custom_lr_scheduler")
@@ -642,23 +734,16 @@ def run():
                 col1, col2, col3 = st.columns(3)
                 
                 with col1:
-                    learning_rate = st.select_slider(
-                        "Learning Rate",
-                        options=[0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05],
-                        value=0.001,
-                        key="custom_lr"
-                    )
+                    learning_rate = st.number_input("Learning Rate", min_value=0.0001, max_value=0.1, 
+                                                    value=0.001, step=0.0001, format="%.4f", key="custom_learning_rate")
                     
                 with col2:
-                    batch_size = st.select_slider(
-                        "Batch Size",
-                        options=[8, 16, 32, 64, 128, 256],
-                        value=32,
-                        key="custom_batch"
-                    )
+                    batch_size = st.number_input("Batch Size", min_value=8, max_value=2048, value=64, 
+                                                 step=64, key="custom_batch_size")
                     
                 with col3:
-                    epochs = st.slider("Maximum Epochs", 10, 500, 100, key="custom_epochs")
+                    epochs = st.number_input("Maximum Epochs", min_value=1, max_value=500, value=100, 
+                                             step=20, key="custom_epochs")
                 
                 custom_deep_learning = {
                     "type": "custom_deep_learning",
@@ -687,41 +772,55 @@ def run():
                 
                 with col1:
                     # Input and output sequence length
-                    input_length = st.slider("Input Sequence Length", 1, 100, 10, key="custom_linear_input_length")
-                    output_length = st.slider("Output Sequence Length", 1, 50, 1, key="custom_linear_output_length")
+                    input_length = st.number_input("Input Sequence Length", min_value=1, max_value=500, 
+                                                   value=12, step=3, key="custom_linear_input_length")
+                    output_length = st.number_input("Output Sequence Length", min_value=1, max_value=500, 
+                                                    value=12, step=3, key="custom_linear_output_length")
                     
                     # Loss function selection
                     loss_function = st.selectbox(
                         "Loss Function",
-                        ["MSE", "MAE", "Huber"],
+                        loss_options,
                         index=0,
                         key="custom_linear_loss"
                     )
+
+                    selected_custom_loss = None
+                    if loss_function == "Custom Loss":
+                        selected_custom_loss = st.selectbox(
+                            "Select Custom Loss",
+                            list(custom_losses.keys()),
+                            format_func=lambda x: x.split(".")[-1]  # Show class name only
+                        )
+                        
+                        # Display loss information
+                        if selected_custom_loss:
+                            loss_class = custom_losses[selected_custom_loss]
+                            loss_info = get_loss_info(loss_class)
+                            st.info(f"**Description:** {loss_info['description']}")
                     
                 with col2:
                     # Dataset splits
-                    train_ratio = st.slider("Training Set Ratio", 0.5, 0.9, 0.7, 0.05, key="custom_linear_train_ratio")
-                    val_ratio = st.slider("Validation Set Ratio", 0.0, 0.3, 0.15, 0.05, key="custom_linear_val_ratio")
+                    train_ratio = st.number_input("Training Set Ratio", min_value=0.5, max_value=0.9, value=0.7, 
+                                                  step=0.05, key="custom_linear_train_ratio")
+                    val_ratio = st.number_input("Validation Set Ratio", min_value=0.0, max_value=0.3, value=0.15,
+                                                 step=0.05, key="custom_linear_val_ratio")
                     test_ratio = 1.0 - train_ratio - val_ratio
                     st.write(f"Test Set Ratio: {test_ratio:.2f}")
                     
-                    # Learning rate and batch size
-                    learning_rate = st.select_slider(
-                        "Learning Rate",
-                        options=[0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05],
-                        value=0.01,
-                        key="custom_linear_lr"
-                    )
-                    
-                    batch_size = st.select_slider(
-                        "Batch Size",
-                        options=[8, 16, 32, 64, 128, 256],
-                        value=32,
-                        key="custom_linear_batch"
-                    )
+                col1, col2, col3 = st.columns(3)
                 
-                # Training parameters
-                epochs = st.slider("Maximum Epochs", 10, 500, 100, key="custom_linear_epochs")
+                with col1:
+                    learning_rate = st.number_input("Learning Rate", min_value=0.0001, max_value=0.1, value=0.001,
+                                                     step=0.0001, format="%.4f", key="custom_linear_learning_rate")
+                    
+                with col2:
+                    batch_size = st.number_input("Batch Size", min_value=8, max_value=2048, value=64,
+                                                  step=64, key="custom_linear_batch_size")
+                    
+                with col3:
+                    epochs = st.number_input("Maximum Epochs", min_value=1, max_value=500, value=100,
+                                             step=20, key="custom_linear_epochs")
                 
                 custom_linear = {
                     "type": "custom_linear",
@@ -740,22 +839,29 @@ def run():
                 }
 
     # Select the model based on the selected tab
-    if builtin_tabs[0].active:
-        selected_model = deep_learning_model  # Use this variable name instead of selected_model in the Deep Learning tab
-    elif builtin_tabs[1].active:
-        selected_model = linear_model  # Use this variable name instead of selected_model in the Linear tab
-    else:
+    if model_tabs[1].active:
         selected_model = custom_deep_learning if model_info['type'] == "deep_learning" else custom_linear
+    elif model_tabs[0].active and builtin_tabs[0].active:
+        selected_model = deep_learning_model  # Use this variable name instead of selected_model in the Deep Learning tab
+    elif model_tabs[0].active and builtin_tabs[1].active:
+        selected_model = linear_model  # Use this variable name instead of selected_model in the Linear tab
+
+    # Display model information
+    st.write(f"**Model Type:** {selected_model['model_name'].title()}")
+    
+    # Update model_params dictionary
+    if loss_function == "Custom Loss" and selected_custom_loss:
+        model_params["custom_loss"] = selected_custom_loss
     
     # Custom metrics selection
     st.header("Evaluation Metrics")
     
     # Built-in metrics
-    builtin_metrics = ["MSE", "MAE", "RMSE", "R²"]
+    builtin_metrics = ["R²", "MAPE", "RMSE", "MSE", "MAE"]
     selected_builtin_metrics = st.multiselect(
         "Select Built-in Metrics",
         builtin_metrics,
-        default=builtin_metrics[:2]
+        default=builtin_metrics[:3]
     )
     
     # Custom metrics
@@ -881,7 +987,7 @@ def run():
                     elif model_name == "RNN":
                         model = SimpleRNN(input_dim, hidden_dim, output_dim, num_layers)
                     elif model_name == "Transformer":
-                        model = Transformer(input_dim, hidden_dim, output_dim, num_layers)
+                        model = Transformer(input_dim, hidden_dim, output_dim, num_layers, nhead=num_heads)
                 else:
                     # Custom deep learning model
                     model_class = model_params["model_class"]
@@ -903,12 +1009,16 @@ def run():
             model = model.to(device)
             
             # Set loss function
-            if model_params["loss_function"] == "MSE":
+            if model_params["loss_function"] == "L2Loss":
                 criterion = nn.MSELoss()
-            elif model_params["loss_function"] == "MAE":
+            elif model_params["loss_function"] == "L1Loss":
                 criterion = nn.L1Loss()
             elif model_params["loss_function"] == "Huber":
                 criterion = nn.SmoothL1Loss()
+            elif model_params["loss_function"] == "Custom Loss":
+                # Initialize the custom loss
+                loss_class = custom_losses[model_params["custom_loss"]]
+                criterion = loss_class()
             
             # Set optimizer
             optimizer = optim.Adam(model.parameters(), lr=model_params["learning_rate"])
@@ -963,6 +1073,9 @@ def run():
             
             if "R²" in selected_builtin_metrics:
                 selected_metrics["R²"] = lambda y_true, y_pred: r2_score(y_true, y_pred)
+            
+            if "MAPE" in selected_builtin_metrics:
+                selected_metrics["MAPE"] = lambda y_true, y_pred: mean_absolute_percentage_error(y_true, y_pred)
             
             # Add custom metrics
             for metric_key in selected_custom_metrics:
