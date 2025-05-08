@@ -390,6 +390,10 @@ def run():
         elif plot_type == "Error Distribution":
             num_bins = st.slider("Number of Bins", 10, 100, 30)
         
+        # Initialize session state for the figure if it doesn't exist
+        if 'fig' not in st.session_state:
+            st.session_state.fig = None
+
         # Generate the plot
         if st.button("Generate Plot"):
             fig, ax = plt.subplots(figsize=(12, 6))
@@ -449,17 +453,24 @@ def run():
                 ax.set_title(f'Error Distribution: {target_vars[target_var_idx]}')
                 ax.grid(True, alpha=0.3)
             
-            st.pyplot(fig)
+            # Store the figure in session state
+            st.session_state.fig = fig
             
-            # Option to save the plot
-            if st.button("Save Plot"):
+            # Display the plot
+            st.pyplot(fig)
+
+        # Save Plot button (outside the Generate Plot button block)
+        if st.button("Save Plot"):
+            if st.session_state.fig is not None:
                 # Create directory if it doesn't exist
                 os.makedirs("plots", exist_ok=True)
                 
                 # Save the plot
                 plot_file = f"plots/{plot_type.replace(' ', '_').lower()}_{target_vars[target_var_idx]}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-                plt.savefig(plot_file, dpi=300, bbox_inches="tight")
+                st.session_state.fig.savefig(plot_file, dpi=300, bbox_inches="tight")
                 st.success(f"Plot saved as {plot_file}")
+            else:
+                st.warning("Please generate a plot first.")
         
         # Export predictions section
         st.header("Export Predictions")

@@ -10,6 +10,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset, random_split
 from datetime import datetime
 import pickle
+import math
 import copy
 from pathlib import Path
 import platform
@@ -76,15 +77,47 @@ class GRU(nn.Module):
         out = self.fc(out[:, -1, :])
         return out
 
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_seq_length=5000, dropout=0.1):
+        super().__init__()
+        self.dropout = nn.Dropout(p=dropout)
+        
+        # Create positional encoding matrix
+        pe = torch.zeros(max_seq_length, d_model)
+        position = torch.arange(0, max_seq_length, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0)
+        
+        self.register_buffer('pe', pe)
+        
+    def forward(self, x):
+        x = x + self.pe[:, :x.size(1), :]
+        return self.dropout(x)
+
 class Transformer(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, num_layers, nhead=8, dropout=0.2):
+    def __init__(self, input_dim, d_model=64, hidden_dim=256, output_dim=1, 
+                 num_layers=2, nhead=8, dropout=0.2, forecast_horizon=1,
+                 use_projection=True, use_causal_mask=True):
         super(Transformer, self).__init__()
         
-        # Ensure nhead divides hidden_dim
-        assert hidden_dim % nhead == 0, f"Hidden dimension ({hidden_dim}) must be divisible by num_heads ({nhead})"
+        # Input projection layer (if original dimension is small)
+        self.use_projection = use_projection
+        if use_projection:
+            self.input_projection = nn.Linear(input_dim, d_model)
+            model_dim = d_model
+        else:
+            model_dim = input_dim
+            assert model_dim % nhead == 0, f"Model dimension ({model_dim}) must be divisible by num_heads ({nhead})"
         
+        # Positional encoding
+        self.pos_encoder = PositionalEncoding(model_dim, dropout=dropout)
+        
+        # Transformer encoder
         self.encoder_layer = nn.TransformerEncoderLayer(
-            d_model=input_dim, 
+            d_model=model_dim,
             nhead=nhead,
             dim_feedforward=hidden_dim,
             dropout=dropout,
@@ -96,16 +129,55 @@ class Transformer(nn.Module):
             num_layers=num_layers
         )
         
-        self.fc = nn.Linear(input_dim, output_dim)
+        # Output layers with support for multi-horizon forecasting
+        self.forecast_horizon = forecast_horizon
+        
+        if forecast_horizon > 1:
+            # For multi-step forecasting, we'll use separate prediction head
+            self.output_layer = nn.Linear(model_dim, output_dim * forecast_horizon)
+        else:
+            # For single-step forecasting, simple linear layer
+            self.output_layer = nn.Linear(model_dim, output_dim)
+            
+        self.use_causal_mask = use_causal_mask
+        self.output_dim = output_dim
+        
+    def _generate_causal_mask(self, seq_len):
+        # Lower triangular mask to prevent attending to future time steps
+        mask = torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool()
+        return mask
         
     def forward(self, x):
-        # Create mask to avoid attending to padding
-        mask = None
-        out = self.transformer_encoder(x, mask)
-        # Use the last token for prediction
-        out = self.fc(out[:, -1, :])
-        return out
-
+        # x shape: [batch_size, seq_len, input_dim]
+        seq_len = x.size(1)
+        batch_size = x.size(0)
+        
+        # Apply input projection if specified
+        if self.use_projection:
+            x = self.input_projection(x)
+        
+        # Add positional encoding
+        x = self.pos_encoder(x)
+        
+        # Generate causal mask if needed
+        mask = self._generate_causal_mask(seq_len).to(x.device) if self.use_causal_mask else None
+        
+        # Apply transformer encoder
+        out = self.transformer_encoder(x, mask=mask)
+        
+        # Extract features from the last time step
+        last_hidden = out[:, -1, :]
+        
+        # Apply output layer
+        if self.forecast_horizon > 1:
+            # For multi-horizon forecasting
+            predictions = self.output_layer(last_hidden)
+            # Return flattened output to match other models
+            return predictions
+        else:
+            # For single-step forecasting
+            return self.output_layer(last_hidden)
+        
 class LinearModel(nn.Module):
     def __init__(self, input_dim, output_dim):
         super(LinearModel, self).__init__()
@@ -412,15 +484,18 @@ def run():
     st.header("Model Selection")
     
     # Create tabs for different model categories
-    model_tabs = st.tabs(["Built-in Models", "Custom Models"])
+    # model_tabs = st.tabs(["Built-in Models", "Custom Models"])
+
+    model_type = st.selectbox("Select Model Type", ["Built-in", "Custom"])
     
-    with model_tabs[0]:  # Built-in Models
+    if model_type == "Built-in":  # Built-in Models
         st.subheader("Built-in Model Selection")
         
         # Use nested tabs for deep learning vs linear
-        builtin_tabs = st.tabs(["Deep Learning Models", "Linear Models"])
+        # builtin_tabs = st.tabs(["Deep Learning Models", "Linear Models"])
+        builtin_model_type = st.selectbox("Select Built-in Model Type", ["Deep Learning", "Linear"], key="builtin_model_type")
         
-        with builtin_tabs[0]:  # Deep Learning Models
+        if builtin_model_type == "Deep Learning":
             col1, col2 = st.columns(2)
             
             with col1:
@@ -438,8 +513,11 @@ def run():
 
                 # If Transformer model is selected, add num_heads parameter
                 if dl_model_type == "Transformer":
-                    # Calculate valid divisors of hidden_dim
-                    divisors = [i for i in range(1, hidden_dim + 1) if hidden_dim % i == 0]
+
+                    d_model = st.number_input("Model Dimension", min_value=32, max_value=2048, value=64, step=32)
+
+                    # Calculate valid divisors of d_model
+                    divisors = [i for i in range(1, d_model + 1) if d_model % i == 0]
                     
                     # Default to a value close to 8 (common default) if possible
                     default_index = min(range(len(divisors)), key=lambda i: abs(divisors[i] - 8))
@@ -524,7 +602,7 @@ def run():
             with col3:
                 epochs = st.number_input("Maximum Epochs", min_value=1, max_value=1000, value=100, step=20)
             
-            deep_learning_model = {
+            selected_model = {
                 "type": "deep_learning",
                 "model_name": dl_model_type,
                 "num_layers": num_layers,
@@ -545,9 +623,10 @@ def run():
             }
             
             if dl_model_type == "Transformer":
-                deep_learning_model["num_heads"] = num_heads
+                selected_model["d_model"] = d_model
+                selected_model["num_heads"] = num_heads
             
-        with builtin_tabs[1]:  # Linear Models
+        if builtin_model_type == "Linear":
             st.subheader("Linear Model Configuration")
             
             linear_model_type = st.selectbox(
@@ -607,7 +686,7 @@ def run():
                 # Training parameters
                 epochs = st.number_input("Maximum Epochs", min_value=1, max_value=500, value=100, step=20, key="linear_epochs")
             
-            linear_model = {
+            selected_model = {
                 "type": "linear",
                 "model_name": linear_model_type,
                 "input_length": input_length,
@@ -621,7 +700,7 @@ def run():
                 "epochs": epochs
             }
     
-    with model_tabs[1]:  # Custom Models
+    if model_type == "Custom":
         st.subheader("Custom Model Selection")
         
         if not custom_models:
@@ -658,8 +737,11 @@ def run():
 
                     # If Transformer model is selected, add num_heads parameter
                     if model_info['architecture'].title() == "Transformer":
-                        # Calculate valid divisors of hidden_dim
-                        divisors = [i for i in range(1, hidden_dim + 1) if hidden_dim % i == 0]
+
+                        d_model = st.number_input("Model Dimension", min_value=32, max_value=2048, value=64, step=32)
+
+                        # Calculate valid divisors of d_model
+                        divisors = [i for i in range(1, d_model + 1) if d_model % i == 0]
                         
                         # Default to a value close to 8 (common default) if possible
                         default_index = min(range(len(divisors)), key=lambda i: abs(divisors[i] - 8))
@@ -745,7 +827,7 @@ def run():
                     epochs = st.number_input("Maximum Epochs", min_value=1, max_value=500, value=100, 
                                              step=20, key="custom_epochs")
                 
-                custom_deep_learning = {
+                selected_model = {
                     "type": "custom_deep_learning",
                     "model_name": custom_model_key.split(".")[-1],
                     "model_class": custom_model_class,
@@ -822,7 +904,7 @@ def run():
                     epochs = st.number_input("Maximum Epochs", min_value=1, max_value=500, value=100,
                                              step=20, key="custom_linear_epochs")
                 
-                custom_linear = {
+                selected_model = {
                     "type": "custom_linear",
                     "model_name": custom_model_key.split(".")[-1],
                     "model_class": custom_model_class,
@@ -838,16 +920,6 @@ def run():
                     "epochs": epochs
                 }
 
-    # Select the model based on the selected tab
-    if model_tabs[1].active:
-        selected_model = custom_deep_learning if model_info['type'] == "deep_learning" else custom_linear
-    elif model_tabs[0].active and builtin_tabs[0].active:
-        selected_model = deep_learning_model  # Use this variable name instead of selected_model in the Deep Learning tab
-    elif model_tabs[0].active and builtin_tabs[1].active:
-        selected_model = linear_model  # Use this variable name instead of selected_model in the Linear tab
-
-    # Display model information
-    st.write(f"**Model Type:** {selected_model['model_name'].title()}")
     
     # Update model_params dictionary
     if loss_function == "Custom Loss" and selected_custom_loss:
@@ -987,7 +1059,8 @@ def run():
                     elif model_name == "RNN":
                         model = SimpleRNN(input_dim, hidden_dim, output_dim, num_layers)
                     elif model_name == "Transformer":
-                        model = Transformer(input_dim, hidden_dim, output_dim, num_layers, nhead=num_heads)
+                        model = Transformer(input_dim, model_params["d_model"], hidden_dim, output_dim, 
+                                            num_layers, nhead=model_params["num_heads"])
                 else:
                     # Custom deep learning model
                     model_class = model_params["model_class"]
