@@ -1,0 +1,32 @@
+# Core dependencies
+streamlit>=1.31.0
+pandas>=2.1.0
+numpy>=1.26.0
+matplotlib>=3.8.0
+
+# Deep learning
+# Note: PyTorch should be installed separately based on your operating system
+# For platform-specific installation instructions, visit: https://pytorch.org/get-started/locally/
+# Windows/macOS users should run the appropriate command from the installation guide
+# before installing the remaining requirements
+# torch>=2.1.0
+# torchvision>=0.16.0
+
+# Machine learning and metrics
+scikit-learn>=1.3.0
+
+# Data import/export
+openpyxl>=3.1.0
+xlrd>=2.0.1
+python-dateutil>=2.8.2
+
+# File handling and system
+pathlib>=1.0.1
+importlib-metadata>=6.0.0
+
+# Optional visualization enhancements
+plotly>=5.18.0
+seaborn>=0.13.0
+
+# Progress tracking
+tqdm>=4.66.0

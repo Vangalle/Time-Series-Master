@@ -1,0 +1,10 @@
+{
+    "file_name": "9_192021_data.csv",
+    "input_variables": [
+        "3Wave_Height(m)",
+        "Date"
+    ],
+    "target_variables": [
+        "3Wave_Height(m)"
+    ]
+}
