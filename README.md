@@ -8,7 +8,7 @@ Time Series Master is a comprehensive, user-friendly application designed to sim
 
 ## Youtube Overview
 
-[![IMAGE ALT TEXT HERE](https://img.youtube.com/vi/278fpCfsRDJQLn27/0.jpg)](https://www.youtube.com/watch?v=278fpCfsRDJQLn27)
+[![IMAGE ALT TEXT HERE](https://img.youtube.com/vi/n1J1X5Fs_Yg/0.jpg)](https://www.youtube.com/watch?v=n1J1X5Fs_Yg)
 
 ## Key Features
 
