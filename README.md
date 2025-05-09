@@ -229,6 +229,7 @@ Time_Series_Master/
 ├── main_app.py                 # Main application entry point
 ├── custom_model_loader.py      # Custom model loading utility
 ├── custom_metrics_loader.py    # Custom metrics loading utility
+├── custom_loss_loader.py       # Custom loss function loading utility
 ├── components/                 # Application components
 │   ├── data_loader.py          # Data selection component
 │   ├── model_training.py       # Model training component
@@ -237,6 +238,8 @@ Time_Series_Master/
 │   └── example_models.py       # Example custom models (auto-generated)
 ├── custom_metrics/             # Directory for custom metric definitions
 │   └── example_metrics.py      # Example custom metrics (auto-generated)
+├── custom_losses/             # Directory for custom metric definitions
+│   └── example_losses.py      # Example custom metrics (auto-generated)
 ├── configs/                    # Saved configurations
 ├── models/                     # Saved trained models
 ├── exports/                    # Exported predictions

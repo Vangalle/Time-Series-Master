@@ -155,11 +155,32 @@ def export_predictions(predictions, ground_truth, target_vars, output_length):
     
     return export_df
 
+def add_scroll_to_top():
+    """Add enhanced JavaScript to ensure scrolling to top of page."""
+    js = '''
+    <script>
+        // Function to scroll to top
+        function scrollToTop() {
+            window.scrollTo({top: 0, behavior: 'instant'});
+        }
+        
+        // Multiple event listeners for different scenarios
+        window.addEventListener('load', scrollToTop);
+        document.addEventListener('DOMContentLoaded', scrollToTop);
+        
+        // Timeout to ensure it runs after Streamlit's scripts
+        setTimeout(scrollToTop, 100);
+        setTimeout(scrollToTop, 500);
+    </script>
+    '''
+    st.markdown(js, unsafe_allow_html=True)
+
 def run():
     """
     Main function to run the model evaluation component.
     This function will be called from the main application.
     """
+    add_scroll_to_top()
     # Title and introduction
     st.title("Time Series Model Evaluation")
     st.write("Evaluate model performance and export predictions.")
@@ -176,7 +197,20 @@ def run():
     
     # Load available saved models
     available_models = load_available_models()
+
+    st.subheader("Current Configuration")
     
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write(f"**Data Source:** {st.session_state.file_name}")
+        st.write(f"**Number of Rows:** {st.session_state.data_Rows}")
+        st.write(f"**Number of Columns:** {st.session_state.data_Columns}")
+
+    with col2:
+        st.write(f"**Input Variables:** {', '.join(st.session_state.input_vars)}")
+        st.write(f"**Target Variables:** {', '.join(st.session_state.target_vars)}")
+
     # Model selection section
     st.header("Select Model for Evaluation")
     

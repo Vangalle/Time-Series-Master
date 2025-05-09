@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 import json
+import time
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -309,7 +310,7 @@ def prepare_time_series_data(data, input_vars, target_vars, input_length, output
 
 # Function to train the model
 def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, 
-               device, epochs, patience, verbose=True):
+               device, epochs, patience, loss_chart, progress_bar, status_text, verbose=True):
     best_val_loss = float('inf')
     best_model = None
     patience_counter = 0
@@ -349,14 +350,21 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
         val_loss /= len(val_loader)
         training_history['val_loss'].append(val_loss)
         
+        # Update progress visualization
+        progress_bar.progress((epoch + 1) / epochs)
+        status_text.text(f"Epoch {epoch+1}/{epochs} - Train: {train_loss:.6f}, Val: {val_loss:.6f}")
+
+        # Add new data point to the chart
+        loss_chart.add_rows(pd.DataFrame({
+            'Training Loss': [train_loss],
+            'Validation Loss': [val_loss]
+        }))
+        
         if scheduler is not None:
             if isinstance(scheduler, optim.lr_scheduler.ReduceLROnPlateau):
                 scheduler.step(val_loss)
             else:
                 scheduler.step()
-        
-        if verbose:
-            st.write(f"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.4f} - Val Loss: {val_loss:.4f}")
         
         # Early stopping check
         if val_loss < best_val_loss:
@@ -367,7 +375,7 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
             patience_counter += 1
             if patience_counter >= patience:
                 if verbose:
-                    st.write(f"Early stopping triggered after {epoch+1} epochs")
+                    status_text.text(f"Early stopping triggered after {epoch+1} epochs")
                 break
     
     return best_model, training_history
@@ -435,11 +443,32 @@ def save_model_and_results(model_info, model_config, norm_params,
     # Return data for saving results separately
     return model_path, timestamp
 
+def add_scroll_to_top():
+    """Add enhanced JavaScript to ensure scrolling to top of page."""
+    js = '''
+    <script>
+        // Function to scroll to top
+        function scrollToTop() {
+            window.scrollTo({top: 0, behavior: 'instant'});
+        }
+        
+        // Multiple event listeners for different scenarios
+        window.addEventListener('load', scrollToTop);
+        document.addEventListener('DOMContentLoaded', scrollToTop);
+        
+        // Timeout to ensure it runs after Streamlit's scripts
+        setTimeout(scrollToTop, 100);
+        setTimeout(scrollToTop, 500);
+    </script>
+    '''
+    st.markdown(js, unsafe_allow_html=True)
+
 def run():
     """
     Main function to run the model training component.
     This function will be called from the main application.
     """
+    add_scroll_to_top()
     # Title and introduction
     st.title("Time Series Model Selection and Training")
     st.write("Select a model, configure parameters, and train your time series model.")
@@ -459,6 +488,8 @@ def run():
     
     # Get data from session state
     data = st.session_state.data
+    st.session_state.data_Rows = data.shape[0]
+    st.session_state.data_Columns = data.shape[1]
     input_vars = st.session_state.input_vars
     target_vars = st.session_state.target_vars
     
@@ -473,9 +504,9 @@ def run():
     
     with col1:
         st.write(f"**Data Source:** {st.session_state.file_name}")
-        st.write(f"**Number of Rows:** {data.shape[0]}")
-        st.write(f"**Number of Columns:** {data.shape[1]}")
-    
+        st.write(f"**Number of Rows:** {st.session_state.data_Rows}")
+        st.write(f"**Number of Columns:** {st.session_state.data_Columns}")
+
     with col2:
         st.write(f"**Input Variables:** {', '.join(input_vars)}")
         st.write(f"**Target Variables:** {', '.join(target_vars)}")
@@ -958,8 +989,22 @@ def run():
         st.session_state.training_history = None
         st.session_state.best_model_state = None
         
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+        # Create containers for visualization
+        training_container = st.container()
+        with training_container:
+            st.subheader("Training Progress")
+            col1, col2 = st.columns([3, 1])
+            
+            with col1:
+                # Initialize the chart with empty data
+                loss_chart = st.line_chart(pd.DataFrame({
+                    'Training Loss': [],
+                    'Validation Loss': []
+                }), color=["#2B66C2", "#93C6F9"])
+            
+            with col2:
+                progress_bar = st.progress(0)
+                status_text = st.empty()
         
         try:
             # Prepare data
@@ -1037,9 +1082,9 @@ def run():
             input_feature_count = len(transformed_input_vars)
 
             # Log information about dimensions for debugging
-            st.info(f"Input variables count: {len(input_vars)}")
-            st.info(f"Transformed input variables count: {input_feature_count}")
-            st.info(f"Input length: {input_length}, Output length: {output_length}")
+            # st.info(f"Input variables count: {len(input_vars)}")
+            # st.info(f"Transformed input variables count: {input_feature_count}")
+            # st.info(f"Input length: {input_length}, Output length: {output_length}")
             
             # Initialize model based on selection
             if model_params["type"] in ["deep_learning", "custom_deep_learning"]:
@@ -1050,7 +1095,7 @@ def run():
                 
                 if model_params["type"] == "deep_learning":
                     model_name = model_params["model_name"]
-                    st.info(f"Creating {model_name} model with input dim {input_dim}, hidden dim {hidden_dim}, output dim {output_dim}")
+                    # st.info(f"Creating {model_name} model with input dim {input_dim}, hidden dim {hidden_dim}, output dim {output_dim}")
                     
                     if model_name == "LSTM":
                         model = LSTM(input_dim, hidden_dim, output_dim, num_layers)
@@ -1119,11 +1164,13 @@ def run():
             epochs = model_params["epochs"]
             patience = model_params.get("patience", 15) if model_params.get("use_early_stopping", True) else float('inf')
             
-            best_model_state, training_history = train_model(
-                model, train_loader, val_loader, criterion, optimizer, scheduler,
-                device, epochs, patience, verbose=False
-            )
+            best_model_state, training_history = train_model(model, train_loader, val_loader, criterion, optimizer, 
+                                                             scheduler, device, epochs, patience, loss_chart, progress_bar, 
+                                                             status_text, verbose=False)
             
+            # Mark training as complete
+            status_text.success("Training complete!")
+
             # Update progress
             progress_bar.progress(70)
             status_text.text("Evaluating model...")
@@ -1196,11 +1243,6 @@ def run():
             
             st.success(f"Model trained successfully and saved as {model_path}")
             
-            # Show option to proceed to evaluation
-            if st.button("Proceed to Model Evaluation"):
-                st.session_state.page = "model_evaluation"
-                st.rerun()
-            
         except Exception as e:
             st.error(f"Error during training: {e}")
             import traceback
@@ -1210,17 +1252,38 @@ def run():
     if st.session_state.trained_model is not None:
         st.header("Training Results")
         
-        # Show training history
-        st.subheader("Training History")
+        st.subheader("Training Analysis")
+
+        # Get training history from session state instead of local variable
+        training_history = st.session_state.training_history
         
-        history = st.session_state.training_history
-        epochs_range = range(1, len(history['train_loss']) + 1)
-        
+        # Create a more detailed analysis plot
         fig, ax = plt.subplots(figsize=(10, 6))
-        ax.plot(epochs_range, history['train_loss'], label='Training Loss')
-        ax.plot(epochs_range, history['val_loss'], label='Validation Loss')
+        epochs_range = range(1, len(training_history['train_loss']) + 1)
+        ax.plot(epochs_range, training_history['train_loss'], label='Training Loss')
+        ax.plot(epochs_range, training_history['val_loss'], label='Validation Loss')
+        
+        # Add min/max lines and annotations
+        min_val_loss = min(training_history['val_loss'])
+        min_val_epoch = training_history['val_loss'].index(min_val_loss) + 1
+        ax.axhline(y=min_val_loss, color='r', linestyle='--', alpha=0.3)
+        ax.axvline(x=min_val_epoch, color='r', linestyle='--', alpha=0.3)
+
+        ax.plot(min_val_epoch, min_val_loss, 'o', markersize=3, 
+            markerfacecolor='red',  # Distinctive green color
+            markeredgecolor='darkred',
+            markeredgewidth=0.5,
+            label='Best Model')
+
+        ax.text(min_val_epoch + 1, min_val_loss*0.95, 
+            f'Best: {min_val_loss:.4f} (epoch {min_val_epoch})',
+            fontsize=9, verticalalignment='center',
+            bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8))
+
+        
         ax.set_xlabel('Epoch')
         ax.set_ylabel('Loss')
+        ax.set_title('Training History - Final Results')
         ax.legend()
         ax.grid(True, alpha=0.3)
         st.pyplot(fig)
@@ -1236,6 +1299,11 @@ def run():
             })
             
             st.table(metrics_df)
+        
+            # Show option to proceed to evaluation
+            if st.button("Proceed to Model Evaluation"):
+                st.session_state.page = "model_evaluation"
+                st.rerun()
 
 # If run directly outside the main application
 if __name__ == "__main__":

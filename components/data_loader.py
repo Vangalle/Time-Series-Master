@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
+import seaborn as sns
 import numpy as np
 import os
 import json
@@ -80,11 +81,73 @@ def run():
         # Show number of rows to preview
         num_rows = st.slider("Number of rows to preview", 5, 100, 10)
         st.dataframe(data.head(num_rows))
+
+        numeric_data = data.select_dtypes(include=['number'])
         
         # Data statistics toggle
         if st.checkbox("Show Data Statistics"):
             st.subheader("Data Statistics")
             st.write(data.describe())
+            if not numeric_data.empty:
+                if not numeric_data.empty:
+                    correlation_method = st.selectbox("Select Correlation Method", ["Pearson", "Spearman", "Kendall"], index=0)
+                    correlation_matrix = numeric_data.corr(method=correlation_method.lower())
+                    # st.write("Correlation Matrix:")
+                    # st.dataframe(correlation_matrix)
+                    # Calculate appropriate figure size and font size based on number of columns
+                    num_cols = len(correlation_matrix.columns)
+                    
+                    # Dynamically adjust figure size based on column count
+                    # Base size of 8x8, increasing by 0.5 per column, capped at 20x20
+                    fig_size = num_cols
+                    
+                    # Dynamically adjust font size based on column count
+                    font_size = fig_size + 2
+                    
+                    # Annotation size slightly smaller than font size
+                    annot_size = max(6, font_size - 2)
+
+                    # Create correlation heatmap with seaborn
+                    fig, ax = plt.subplots(figsize=(fig_size, fig_size))
+                    heatmap = sns.heatmap(correlation_matrix, xticklabels=correlation_matrix.columns, 
+                                          yticklabels=correlation_matrix.columns, annot=True, fmt=".2f", 
+                                          cmap='PRGn', vmin=-1, vmax=1, annot_kws={"size": annot_size})
+
+                    # Apply font size to tick labels
+                    plt.xticks(rotation=45, ha='right', fontsize=font_size)
+                    plt.yticks(rotation=0, fontsize=font_size)
+                    
+                    # Adjust colorbar font size
+                    cbar = heatmap.collections[0].colorbar
+                    cbar.ax.tick_params(labelsize=font_size)
+
+                    plt.title(f"{correlation_method} Correlation Heatmap", fontsize=font_size + 3, loc='center')
+                    plt.tight_layout()
+
+                    # Display the plot
+                    st.pyplot(plt)
+                    import io
+                    buffer = io.BytesIO()
+                    fig.savefig(buffer, format='png', dpi=300, bbox_inches='tight')
+                    buffer.seek(0)
+
+                    co1, col2 = st.columns(2)
+                    with co1:
+                        st.download_button(
+                            label="Download Correlation Matrix",
+                            data=correlation_matrix.to_csv().encode('utf-8'),
+                            file_name='correlation_matrix.csv',
+                            mime='text/csv'
+                        )
+                    with col2:
+                        os.makedirs("plots", exist_ok=True)
+                        st.download_button(
+                            label="Download Correlation Heatmap",
+                            data=buffer,
+                            file_name='correlation_heatmap.png',
+                            mime='image/png'
+                        )
+                    
         
         # Column information
         st.subheader("Column Information")
@@ -158,7 +221,7 @@ def run():
             # Usually targets are numeric, but allow any type
             target_options = data.columns.tolist()
             # Remove already selected inputs
-            available_targets = [col for col in target_options if col not in datetime_inputs]
+            available_targets = [col for col in target_options if col not in datetime_cols]
             
             # Filter default target values to only include those in available options
             target_defaults = [var for var in st.session_state.target_vars if var in available_targets]
@@ -212,9 +275,12 @@ def run():
                 plot_width = st.slider("Plot Width", 6, 20, 12)
             with col2:
                 plot_height = st.slider("Plot Height", 4, 15, 6)
-                
-            # Generate plot button
+            
+            if plot_type == "Heatmap (Correlation)":
+                heatmap_type = st.selectbox("Select Heatmap Type", ["Pearson", "Spearman", "Kendall"], index=0)
+
             generate_plot = st.button("Generate Plot")
+            
             
             if generate_plot:
                 # Variables to plot
@@ -266,19 +332,30 @@ def run():
                             # Filter to numeric variables only for correlation
                             numeric_vars = [var for var in vars_to_plot if np.issubdtype(data[var].dtype, np.number)]
                             if len(numeric_vars) > 1:
-                                correlation = data[numeric_vars].corr()
-                                fig, ax = plt.subplots(figsize=(plot_width, plot_height))
-                                im = ax.imshow(correlation, cmap='coolwarm')
-                                # Add labels and colorbar
-                                ax.set_xticks(np.arange(len(numeric_vars)))
-                                ax.set_yticks(np.arange(len(numeric_vars)))
-                                ax.set_xticklabels(numeric_vars, rotation=45, ha="right")
-                                ax.set_yticklabels(numeric_vars)
-                                plt.colorbar(im)
-                                for i in range(len(numeric_vars)):
-                                    for j in range(len(numeric_vars)):
-                                        ax.text(j, i, f"{correlation.iloc[i, j]:.2f}",
-                                                ha="center", va="center", color="black")
+                                correlation = data[numeric_vars].corr(method=heatmap_type.lower())
+                                fig_size = num_cols
+                    
+                                # Dynamically adjust font size based on column count
+                                font_size = fig_size + 2
+                                
+                                # Annotation size slightly smaller than font size
+                                annot_size = max(6, font_size - 2)
+
+                                # Create correlation heatmap with seaborn
+                                fig, ax = plt.subplots(figsize=(fig_size, fig_size))
+                                heatmap = sns.heatmap(correlation, xticklabels=numeric_vars, 
+                                                    yticklabels=numeric_vars, annot=True, fmt=".2f", 
+                                                    cmap='PRGn', vmin=-1, vmax=1, annot_kws={"size": annot_size})
+
+                                # Apply font size to tick labels
+                                plt.xticks(rotation=45, ha='right', fontsize=font_size)
+                                plt.yticks(rotation=0, fontsize=font_size)
+                                
+                                # Adjust colorbar font size
+                                cbar = heatmap.collections[0].colorbar
+                                cbar.ax.tick_params(labelsize=font_size)
+
+                                plt.title(f"{heatmap_type} Correlation Heatmap", fontsize=font_size + 3, loc='center')
                                 plt.tight_layout()
                             else:
                                 st.warning("Correlation heatmap requires at least 2 numeric variables")

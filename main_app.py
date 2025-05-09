@@ -19,17 +19,23 @@ APP_DIR = Path(__file__).parent
 COMPONENTS_DIR = APP_DIR / "components"
 CUSTOM_MODELS_DIR = APP_DIR / "custom_models"
 CUSTOM_METRICS_DIR = APP_DIR / "custom_metrics"
+CUSTOM_LOSSES_DIR = APP_DIR / "custom_losses"
 
 # Create required directories
 os.makedirs(COMPONENTS_DIR, exist_ok=True)
 os.makedirs(CUSTOM_MODELS_DIR, exist_ok=True)
 os.makedirs(CUSTOM_METRICS_DIR, exist_ok=True)
+os.makedirs(CUSTOM_LOSSES_DIR, exist_ok=True)
 
 # Initialize session state
 if 'page' not in st.session_state:
     st.session_state.page = "home"
 if 'data' not in st.session_state:
     st.session_state.data = None
+if 'data_rows' not in st.session_state:
+    st.session_state.data_Rows = None
+if 'data_columns' not in st.session_state:
+    st.session_state.data_Columns = None
 if 'file_name' not in st.session_state:
     st.session_state.file_name = None
 if 'input_vars' not in st.session_state:
@@ -74,6 +80,17 @@ def import_component(component_name):
         st.error(f"Error importing component '{component_name}': {str(e)}")
         return None
 
+def add_scroll_to_top():
+    # JavaScript to scroll to top on page load
+    js = '''
+    <script>
+        window.addEventListener('load', function() {
+            window.scrollTo(0, 0);
+        });
+    </script>
+    '''
+    st.markdown(js, unsafe_allow_html=True)
+
 # Sidebar navigation
 with st.sidebar:
     st.title("Time Series Master")
@@ -99,64 +116,44 @@ with st.sidebar:
         else:
             st.sidebar.warning("Please train a model first.")
     
-    # Show current data and model status
-    st.sidebar.markdown("---")
-    st.sidebar.header("Status")
-    
-    if st.session_state.data is not None:
-        st.sidebar.success(f"Data loaded: {st.session_state.file_name}")
-        st.sidebar.info(f"Rows: {st.session_state.data.shape[0]}, Columns: {st.session_state.data.shape[1]}")
+    if st.session_state.page != "data_selection":
         
-        if st.session_state.input_vars:
-            st.sidebar.info(f"Input variables: {len(st.session_state.input_vars)}")
+        # Custom model and metrics management
+        st.sidebar.markdown("<hr style='margin: 0.5em 0'>", unsafe_allow_html=True)
+        st.sidebar.header("Advanced Options")
         
-        if st.session_state.target_vars:
-            st.sidebar.info(f"Target variables: {len(st.session_state.target_vars)}")
-    else:
-        st.sidebar.info("No data loaded")
-    
-    if st.session_state.trained_model is not None:
-        model_name = st.session_state.config.get("model_name", "Unknown model")
-        st.sidebar.success(f"Model trained: {model_name}")
-    else:
-        st.sidebar.info("No model trained")
-    
-    # Custom model and metrics management
-    st.sidebar.markdown("---")
-    st.sidebar.header("Advanced Options")
-    
-    with st.sidebar.expander("Custom Models"):
-        st.write("Add your custom model .py files to the 'custom_models' directory.")
+        with st.sidebar.expander("Custom Models"):
+            st.write("Add your custom model .py files to the 'custom_models' directory.")
+            
+            if st.button("Create Example Model File"):
+                from custom_model_loader import create_example_model_file
+                example_file = create_example_model_file()
+                st.success(f"Created example model file: {example_file}")
+            
+            if st.button("Refresh Custom Models"):
+                st.rerun()
         
-        if st.button("Create Example Model File"):
-            from custom_model_loader import create_example_model_file
-            example_file = create_example_model_file()
-            st.success(f"Created example model file: {example_file}")
+        with st.sidebar.expander("Custom Metrics"):
+            st.write("Add your custom metric .py files to the 'custom_metrics' directory.")
+            
+            if st.button("Create Example Metrics File"):
+                from custom_metrics_loader import create_example_metrics_file
+                example_file = create_example_metrics_file()
+                st.success(f"Created example metrics file: {example_file}")
+            
+            if st.button("Refresh Custom Metrics"):
+                st.rerun()
         
-        if st.button("Refresh Custom Models"):
-            st.rerun()
-    
-    with st.sidebar.expander("Custom Metrics"):
-        st.write("Add your custom metric .py files to the 'custom_metrics' directory.")
-        
-        if st.button("Create Example Metrics File"):
-            from custom_metrics_loader import create_example_metrics_file
-            example_file = create_example_metrics_file()
-            st.success(f"Created example metrics file: {example_file}")
-        
-        if st.button("Refresh Custom Metrics"):
-            st.rerun()
-    
-    with st.sidebar.expander("Custom Losses"):
-        st.write("Add your custom loss .py files to the 'custom_losses' directory.")
-        
-        if st.button("Create Example Loss File"):
-            from custom_loss_loader import create_example_loss_file
-            example_file = create_example_loss_file()
-            st.success(f"Created example loss file: {example_file}")
-        
-        if st.button("Refresh Custom Losses"):
-            st.rerun()
+        with st.sidebar.expander("Custom Losses"):
+            st.write("Add your custom loss .py files to the 'custom_losses' directory.")
+            
+            if st.button("Create Example Loss File"):
+                from custom_loss_loader import create_example_loss_file
+                example_file = create_example_loss_file()
+                st.success(f"Created example loss file: {example_file}")
+            
+            if st.button("Refresh Custom Losses"):
+                st.rerun()
 
 # Main content area
 if st.session_state.page == "home":
@@ -185,6 +182,7 @@ if st.session_state.page == "home":
     
     - To add custom models, place Python files in the `custom_models` directory
     - To add custom metrics, place Python files in the `custom_metrics` directory
+    - To add custom losses, place Python files in the `custom_losses` directory
     """)
     
     # Example data section
@@ -248,6 +246,7 @@ elif st.session_state.page == "data_selection":
                 st.error(f"Error reading file: {e}")
 
 elif st.session_state.page == "model_training":
+    add_scroll_to_top()
     # Load and run the model training component
     model_training = import_component("model_training")
     if model_training:
@@ -263,6 +262,7 @@ elif st.session_state.page == "model_training":
         st.write("Please ensure that the 'model_training.py' file exists in the components directory.")
 
 elif st.session_state.page == "model_evaluation":
+    add_scroll_to_top()
     # Load and run the model evaluation component
     model_evaluation = import_component("model_evaluation")
     if model_evaluation:
