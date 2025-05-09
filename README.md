@@ -6,6 +6,10 @@ Your ultimate platform for time series prediction or testing your time series pr
 
 Time Series Master is a comprehensive, user-friendly application designed to simplify the process of time series forecasting. With an intuitive interface and powerful capabilities, this platform allows users to rapidly deploy various time series models without writing code, while still providing the flexibility for advanced users to implement custom solutions.
 
+## Youtube Overview
+
+[![IMAGE ALT TEXT HERE](https://img.youtube.com/vi/278fpCfsRDJQLn27/0.jpg)](https://www.youtube.com/watch?v=278fpCfsRDJQLn27)
+
 ## Key Features
 
 - **Streamlined Workflow**: Integrated data loading, model selection, training, and evaluation in a cohesive interface
