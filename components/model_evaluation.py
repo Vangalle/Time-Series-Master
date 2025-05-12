@@ -296,19 +296,19 @@ def run():
         else:
             st.error("No predictions available for evaluation.")
             return
-        st.write(f"Shape of Predictions: {predictions.shape}")
-        st.write(f"Shape of Ground Truth: {ground_truth.shape}")
+        # st.write(f"Shape of Predictions: {predictions.shape}")
+        # st.write(f"Shape of Ground Truth: {ground_truth.shape}")
         # Determine the shape of predictions
         output_length = predictions.shape[1] if predictions.ndim == 3 else 1
         target_vars = model_data['target_vars']
-        st.write(f"target_vars: {target_vars}")
+        # st.write(f"target_vars: {target_vars}")
         
         # Normalization parameters
         norm_params = model_data['norm_params']
         y_mean = norm_params['y_mean']
         y_std = norm_params['y_std']
-        st.write(f"y_mean: {y_mean}")
-        st.write(f"y_std: {y_std}")
+        # st.write(f"y_mean: {y_mean}")
+        # st.write(f"y_std: {y_std}")
         
         # Select which target variable to visualize
         if len(target_vars) > 1:
@@ -381,8 +381,8 @@ def run():
         # Add custom metrics
         metrics_dict.update(selected_custom_metrics)
 
-        st.write(f"Shape of all true values: {all_true_values.shape}")
-        st.write(f"Shape of all predicted values: {all_pred_values.shape}")
+        # st.write(f"Shape of all true values: {all_true_values.shape}")
+        # st.write(f"Shape of all predicted values: {all_pred_values.shape}")
 
         # Calculate metrics
         if metrics_dict and st.button("Calculate Metrics"):

@@ -53,7 +53,7 @@ if 'ground_truth' not in st.session_state:
 if 'training_history' not in st.session_state:
     st.session_state.training_history = None
 if 'datetime_column' not in st.session_state:
-    st.session_state.datetime_column = None
+    st.session_state.datetime_column = False
 if 'uses_positional_encoding' not in st.session_state:
     st.session_state.uses_positional_encoding = False
 if 'positional_encoding_type' not in st.session_state:

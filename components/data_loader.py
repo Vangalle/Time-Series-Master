@@ -8,6 +8,34 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+def prepare_dataframe_for_streamlit(df):
+    """Prepare DataFrame for Streamlit to prevent Arrow conversion errors"""
+    # Create a deep copy to avoid modifying the original
+    df_copy = df.copy()
+    
+    # Process all columns to ensure Arrow compatibility
+    for col in df_copy.columns:
+        # Handle numeric columns
+        if pd.api.types.is_numeric_dtype(df_copy[col]):
+            # Replace infinities and coerce to float64 for consistency
+            df_copy[col] = df_copy[col].replace([np.inf, -np.inf], np.nan)
+            df_copy[col] = pd.to_numeric(df_copy[col], errors='coerce')
+        
+        # Handle datetime columns
+        elif pd.api.types.is_datetime64_dtype(df_copy[col]):
+            try:
+                # Convert to datetime with no timezone
+                df_copy[col] = pd.to_datetime(df_copy[col], errors='coerce').dt.tz_localize(None)
+            except:
+                # If conversion fails, convert to string as fallback
+                df_copy[col] = df_copy[col].astype(str)
+        
+        # Handle all other columns by converting to string
+        else:
+            df_copy[col] = df_copy[col].astype(str)
+    
+    return df_copy
+
 def run():
     """
     Main function to run the data loader component.
@@ -48,6 +76,8 @@ def run():
                     sheet_name = st.selectbox("Select Sheet", excel_file.sheet_names)
                     data = pd.read_excel(uploaded_file, sheet_name=sheet_name)
                 
+                data = prepare_dataframe_for_streamlit(data)
+                
                 # Process potential date columns
                 for col in data.columns:
                     if data[col].dtype == 'object':
@@ -73,6 +103,7 @@ def run():
 
     # Main panel for data preview and variable selection
     if st.session_state.data is not None:
+
         data = st.session_state.data
         
         # Data preview section
@@ -153,7 +184,7 @@ def run():
         st.subheader("Column Information")
         col_info = pd.DataFrame({
             'Column': data.columns,
-            'Type': data.dtypes,
+            'Type': [str(dtype) for dtype in data.dtypes],
             'Non-Null Count': data.count(),
             'Null Count': data.isna().sum(),
             'Unique Values': [data[col].nunique() for col in data.columns]
@@ -162,6 +193,27 @@ def run():
         
         # Column selection section
         st.subheader("Variable Selection")
+
+        # Get numeric columns for input selection
+        numeric_cols = data.select_dtypes(include=['number']).columns.tolist()
+        datetime_cols = data.select_dtypes(include=['datetime']).columns.tolist()
+        categorical_cols = data.select_dtypes(include=['object', 'category']).columns.tolist()
+
+        # Force Arrow compatibility for all columns
+        for col in data.columns:
+            # Handle datetime columns that might cause issues
+            if col in numeric_cols:
+                # Ensure numeric format is compatible
+                data[col] = data[col].replace([np.inf, -np.inf], np.nan)
+                data[col] = pd.to_numeric(data[col], errors='coerce')
+
+            if col in datetime_cols:
+                # Ensure datetime format is compatible (strip timezone if present)
+                data[col] = pd.to_datetime(data[col], errors='coerce').dt.tz_localize(None)
+            
+            # Handle the 'Type' column specifically if it exists
+            if col in categorical_cols:
+                data[col] = data[col].astype(str)
         
         # Create two columns for input and target selection
         col1, col2 = st.columns(2)
@@ -169,29 +221,20 @@ def run():
         with col1:
             st.write("Select Input Variables:")
             
-            # Get numeric columns for input selection
-            numeric_cols = data.select_dtypes(include=['number']).columns.tolist()
-            datetime_cols = data.select_dtypes(include=['datetime']).columns.tolist()
-            categorical_cols = data.select_dtypes(include=['object', 'category']).columns.tolist()
-            
             # Organize columns by type
             st.write("Numeric Variables:")
             # Filter default values to only include variables that exist in the options
-            numeric_defaults = [var for var in st.session_state.input_vars if var in numeric_cols]
             numeric_inputs = st.multiselect(
                 "Select numeric input variables",
-                numeric_cols,
-                default=numeric_defaults
+                numeric_cols
             )
             
             if datetime_cols:
                 st.write("Date/Time Variables:")
                 # Filter default values for datetime columns
-                datetime_defaults = [var for var in st.session_state.input_vars if var in datetime_cols]
                 datetime_inputs = st.multiselect(
                     "Select datetime input variables",
-                    datetime_cols,
-                    default=datetime_defaults
+                    datetime_cols
                 )
             else:
                 datetime_inputs = []
@@ -199,11 +242,9 @@ def run():
             if categorical_cols:
                 st.write("Categorical Variables:")
                 # Filter default values for categorical columns
-                categorical_defaults = [var for var in st.session_state.input_vars if var in categorical_cols]
                 categorical_inputs = st.multiselect(
                     "Select categorical input variables",
-                    categorical_cols,
-                    default=categorical_defaults
+                    categorical_cols
                 )
             else:
                 categorical_inputs = []
@@ -228,12 +269,10 @@ def run():
             available_targets = [col for col in target_options if col not in datetime_cols]
             
             # Filter default target values to only include those in available options
-            target_defaults = [var for var in st.session_state.target_vars if var in available_targets]
             
             selected_targets = st.multiselect(
                 "Select target variables",
-                available_targets,
-                default=target_defaults
+                available_targets
             )
             
             st.session_state.target_vars = selected_targets
@@ -451,63 +490,138 @@ def run():
             if st.button("Load Example Data"):
                 # Generate example data based on selection
                 if example_option == "Synthetic Time Series":
-                    # Create a synthetic time series dataset
+                    # Create a synthetic time series dataset with realistic correlations
                     np.random.seed(42)
-                    dates = pd.date_range(start='2023-01-01', periods=100, freq='D')
-                    data = pd.DataFrame({
-                        'Date': dates,
-                        'Temperature': np.random.normal(25, 5, 100) + 10 * np.sin(np.linspace(0, 4*np.pi, 100)),
-                        'Humidity': np.random.normal(60, 10, 100),
-                        'Pressure': np.random.normal(1013, 5, 100),
-                        'WindSpeed': np.abs(np.random.normal(0, 10, 100)),
-                        'Precipitation': np.abs(np.random.normal(0, 2, 100))
-                    })
+                    dates = pd.date_range(start='2020-01-01', periods=1000, freq='D')
                     
-                elif example_option == "Stock Price Data":
-                    # Create a synthetic stock price dataset
-                    np.random.seed(42)
-                    dates = pd.date_range(start='2023-01-01', periods=252, freq='B')
-                    price = 100
-                    prices = [price]
-                    for _ in range(251):
-                        change = np.random.normal(0, 1) / 100
-                        price = price * (1 + change)
-                        prices.append(price)
+                    # Base temperature with seasonal pattern
+                    temp_base = np.linspace(0, 4*np.pi, 1000)
+                    temperature = np.random.normal(25, 3, 1000) + 10 * np.sin(temp_base)
                     
-                    data = pd.DataFrame({
-                        'Date': dates,
-                        'Close': prices,
-                        'Open': [p * (1 - np.random.uniform(0, 0.01)) for p in prices],
-                        'High': [p * (1 + np.random.uniform(0, 0.02)) for p in prices],
-                        'Low': [p * (1 - np.random.uniform(0, 0.02)) for p in prices],
-                        'Volume': np.random.normal(1000000, 200000, 252)
-                    })
+                    # Humidity negatively correlated with temperature
+                    humidity = 100 - temperature*1.5 + np.random.normal(0, 5, 1000)
+                    humidity = np.clip(humidity, 30, 95)
                     
-                elif example_option == "Temperature Data":
-                    # Create a synthetic temperature dataset
-                    np.random.seed(42)
-                    dates = pd.date_range(start='2023-01-01', periods=365, freq='D')
-                    base_temp = 15
+                    # Pressure with its own cycle, but affected by temperature
+                    pressure_base = 1013 + 3 * np.sin(np.linspace(0, 8*np.pi, 1000))
+                    pressure = pressure_base - 0.2 * (temperature - temperature.mean()) + np.random.normal(0, 2, 1000)
                     
-                    # Seasonal component (yearly cycle)
-                    seasonal = 10 * np.sin(np.linspace(0, 2*np.pi, 365))
+                    # Precipitation related to humidity
+                    precip_prob = (humidity - 40) / 60  # Higher humidity = higher chance of rain
+                    precipitation = np.zeros(1000)
+                    rain_indices = np.random.random(1000) < precip_prob
+                    precipitation[rain_indices] = np.random.exponential(1.5, size=sum(rain_indices))
                     
-                    # Weekly component
-                    weekly = 2 * np.sin(np.linspace(0, 2*np.pi*52, 365))
-                    
-                    # Random noise
-                    noise = np.random.normal(0, 2, 365)
-                    
-                    # Combine components
-                    temperature = base_temp + seasonal + weekly + noise
+                    # Wind speed related to pressure gradients
+                    pressure_diff = np.abs(np.diff(pressure, prepend=[pressure[0]]))
+                    wind_speed = 5 + 2 * pressure_diff + np.random.normal(0, 2, 1000)
+                    wind_speed = np.clip(wind_speed, 0, 30)
                     
                     data = pd.DataFrame({
                         'Date': dates,
                         'Temperature': temperature,
-                        'Precipitation': np.abs(np.random.normal(0, 2, 365)),
-                        'Humidity': 60 + 20 * np.sin(np.linspace(0, 4*np.pi, 365)) + np.random.normal(0, 5, 365),
-                        'WindSpeed': np.abs(np.random.normal(5, 3, 365)),
-                        'CloudCover': np.clip(50 + 30 * np.sin(np.linspace(0, 6*np.pi, 365)) + np.random.normal(0, 10, 365), 0, 100)
+                        'Humidity': humidity,
+                        'Pressure': pressure,
+                        'WindSpeed': wind_speed,
+                        'Precipitation': precipitation
+                    })
+                    
+                elif example_option == "Stock Price Data":
+                    # Create a synthetic stock price dataset with realistic correlations
+                    np.random.seed(42)
+                    dates = pd.date_range(start='2019-01-01', periods=252 * 5, freq='B')
+                    
+                    # Initialize arrays
+                    n = 252 * 5
+                    returns = np.random.normal(0.0005, 0.01, n)  # Daily returns
+                    
+                    # Add some autocorrelation to returns (momentum effect)
+                    for i in range(5, n):
+                        returns[i] += 0.2 * np.mean(returns[i-5:i])
+                    
+                    # Create price series
+                    prices = 100 * np.cumprod(1 + returns)
+                    
+                    # Volatility clustering (GARCH-like effect)
+                    vol = np.abs(returns) * 10
+                    for i in range(5, n):
+                        vol[i] = 0.7 * vol[i] + 0.3 * np.mean(vol[i-5:i])
+                    
+                    # Volume related to volatility
+                    volume_base = 1000000 + 5000000 * vol
+                    
+                    # Higher volume on trend days (price moves in same direction for multiple days)
+                    trend = np.zeros(n)
+                    for i in range(3, n):
+                        if np.all(np.diff(prices[i-3:i+1]) > 0) or np.all(np.diff(prices[i-3:i+1]) < 0):
+                            trend[i] = 1
+                    
+                    volume = volume_base * (1 + 0.5 * trend) * np.random.lognormal(0, 0.3, n)
+                    
+                    # Calculate OHLC with more realistic relationships
+                    daily_range = 0.015 * prices * (1 + vol)  # Range is bigger when volatility is higher
+                    high = prices + daily_range/2
+                    low = prices - daily_range/2
+                    
+                    # Gap based on previous day's close and overnight sentiment
+                    overnight_sentiment = np.random.normal(0, 0.005, n)
+                    open_prices = np.zeros(n)
+                    open_prices[0] = prices[0] * 0.999
+                    
+                    for i in range(1, n):
+                        open_prices[i] = prices[i-1] * (1 + overnight_sentiment[i])
+                    
+                    data = pd.DataFrame({
+                        'Date': dates,
+                        'Close': prices,
+                        'Open': open_prices,
+                        'High': high,
+                        'Low': low,
+                        'Volume': volume
+                    })
+                    
+                elif example_option == "Temperature Data":
+                    # Create a synthetic temperature dataset with realistic correlations
+                    np.random.seed(42)
+                    dates = pd.date_range(start='2019-01-01', periods=365 * 5, freq='D')
+                    n = 365 * 5
+                    
+                    # Base temperature with yearly and weekly cycles
+                    yearly_cycle = np.sin(np.linspace(0, 2*np.pi*5, n))  # 5 years
+                    base_temp = 15 + 10 * yearly_cycle
+                    weekly = 2 * np.sin(np.linspace(0, 2*np.pi*5*52, n))  # Weekly fluctuations
+                    temperature = base_temp + weekly + np.random.normal(0, 2, n)
+                    
+                    # Cloud cover correlated (negatively) with temperature
+                    cloud_cover_base = 50 - 30 * yearly_cycle  # Opposite phase of temperature
+                    cloud_cover = np.clip(cloud_cover_base + 15 * np.random.normal(0, 1, n), 0, 100)
+                    
+                    # Humidity related to temperature and cloud cover
+                    humidity_base = 80 - temperature*0.8 + cloud_cover*0.3
+                    humidity = np.clip(humidity_base + np.random.normal(0, 5, n), 20, 100)
+                    
+                    # Precipitation strongly related to cloud cover and humidity
+                    precip_prob = (cloud_cover/100) * (humidity/100)
+                    precipitation = np.zeros(n)
+                    rain_indices = np.random.random(n) < precip_prob
+                    precipitation[rain_indices] = np.random.exponential(1.5, size=sum(rain_indices))
+                    
+                    # Wind speed related to temperature gradients
+                    temp_diff = np.abs(np.diff(temperature, prepend=[temperature[0]]))
+                    wind_base = 5 + 8 * temp_diff/np.max(temp_diff)
+                    
+                    # Also add some seasonal patterns to wind
+                    wind_seasonal = 2 * np.sin(np.linspace(0, 2*np.pi*5, n) + np.pi)  # Windier in winter
+                    wind_speed = wind_base + wind_seasonal + np.random.normal(0, 1, n)
+                    wind_speed = np.clip(wind_speed, 0, 25)
+                    
+                    data = pd.DataFrame({
+                        'Date': dates,
+                        'Temperature': temperature,
+                        'Precipitation': precipitation,
+                        'Humidity': humidity,
+                        'WindSpeed': wind_speed,
+                        'CloudCover': cloud_cover
                     })
                 
                 # Update session state with the example data

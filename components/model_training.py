@@ -22,12 +22,6 @@ from custom_model_loader import load_custom_models, get_model_info
 from custom_metrics_loader import load_custom_metrics, get_metric_info
 from custom_loss_loader import load_custom_losses, get_loss_info
 
-# Load custom losses
-custom_losses = load_custom_losses()
-loss_options = ["L2Loss", "L1Loss", "Huber"]
-if custom_losses:
-    loss_options.append("Custom Loss")
-
 # Default model definitions
 class SimpleRNN(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, num_layers, input_length, output_length, dropout=0.5):
@@ -260,8 +254,8 @@ class Transformer(nn.Module):
             if self.encoding_type == 'sinusoidal':
                 pos_encoding = self._get_sinusoidal_encoding(position_indices, self.d_model)
             else:  # 'learned'
-                pos_encoding = self.position_embeddings[position_indices.long()]
-            
+                pos_encoding = self.position_embedding(position_indices.long())
+
             tgt = tgt + pos_encoding
             
             # Pass through transformer decoder
@@ -928,6 +922,12 @@ def run():
     # Title and introduction
     st.title("Time Series Model Selection and Training")
     st.write("Select a model, configure parameters, and train your time series model.")
+
+    # Load custom losses
+    custom_losses = load_custom_losses()
+    loss_options = ["L2Loss", "L1Loss", "Huber"]
+    if custom_losses:
+        loss_options.append("Custom Loss")
     
     # Check if data and variables are available
     if (st.session_state.data is None or 
@@ -1068,14 +1068,54 @@ def run():
                         st.info(f"**Description:** {loss_info['description']}")
                 
                 # Dataset splits
-                train_ratio = st.number_input("Training Set Ratio", min_value=0.1, max_value=0.9, value=0.8, step=0.05,
-                                              format="%.2f")
+                try:
+                    # Calculate minimum required samples for validation and test sets
+                    min_samples_needed = input_length + output_length
+                    min_ratio_needed = min_samples_needed / data.shape[0]
+                    
+                    # Maximum training ratio ensuring validation and test sets have minimum samples
+                    max_train_ratio = 1.0 - (2 * min_ratio_needed)
+                    
+                    if max_train_ratio < 0.1:
+                        st.error(f"Not enough data for proper splitting with current parameters.")
+                        st.info(f"Data: {data.shape[0]} rows | Min samples needed per split: {min_samples_needed}")
+                        st.stop()  # Stop execution to prevent further issues
+                    
+                    # Training ratio input with adaptive default value
+                    default_train = min(0.8, max_train_ratio)  # Try for 80% but respect maximum
+                    train_ratio = st.number_input(
+                        "Training Set Ratio", 
+                        min_value=0.1, 
+                        max_value=float(max_train_ratio), 
+                        value=default_train,
+                        step=0.05 if max_train_ratio > 0.2 else 0.01,
+                        format="%.2f",
+                        help = f"Maximum value: {max_train_ratio:.2f} (ensures validation and test sets have enough samples)"
+                    )
+                    
+                    # Calculate remaining ratio for validation and test
+                    remaining_ratio = 1.0 - train_ratio
+                    
+                    # Validation ratio input with proper constraints
+                    max_val_ratio = remaining_ratio - min_ratio_needed  # Ensure test set gets minimum
+                    default_val = min(0.1, max_val_ratio)  # Try for 10% but respect maximum
+                    val_ratio = st.number_input(
+                        "Validation Set Ratio", 
+                        min_value=float(min_ratio_needed), 
+                        max_value=float(max_val_ratio),
+                        value=default_val,
+                        step=0.05 if max_val_ratio > 0.2 else 0.01,
+                        format="%.2f",
+                        help = f"Maximum value: {max_val_ratio:.2f} (ensures test set has enough samples)"
+                    )
+                    
+                    # Calculate and display test ratio
+                    test_ratio = 1.0 - train_ratio - val_ratio
+                    st.write(f"Test Set Ratio: {test_ratio:.2f}")
 
-                val_ratio = st.number_input("Validation Set Ratio", min_value=0.0, max_value=0.5, value=0.10, step=0.05, 
-                                            format="%.2f")
-                
-                test_ratio = 1.0 - train_ratio - val_ratio
-                st.write(f"Test Set Ratio: {test_ratio:.2f}")
+                except Exception as e:
+                    st.error(f"Dataset splitting error: {str(e)}")
+                    st.warning("Please adjust input/output lengths or check your dataset dimensions.")
                 
                 # Early stopping parameters
                 use_early_stopping = st.checkbox("Use Early Stopping", value=True)
@@ -1177,10 +1217,56 @@ def run():
 
             with col2:
                 # Dataset splits
-                train_ratio = st.number_input("Training Set Ratio", min_value=0.5, max_value=0.9, value=0.8, step=0.05, key="linear_train_ratio")
-                val_ratio = st.number_input("Validation Set Ratio", min_value=0.0, max_value=0.3, value=0.1, step=0.05, key="linear_val_ratio")
-                test_ratio = 1.0 - train_ratio - val_ratio
-                st.write(f"Test Set Ratio: {test_ratio:.2f}")
+                try:
+                    # Calculate minimum required samples for validation and test sets
+                    min_samples_needed = input_length + output_length
+                    min_ratio_needed = min_samples_needed / data.shape[0]
+                    
+                    # Maximum training ratio ensuring validation and test sets have minimum samples
+                    max_train_ratio = 1.0 - (2 * min_ratio_needed)
+                    
+                    if max_train_ratio < 0.1:
+                        st.error(f"Not enough data for proper splitting with current parameters.")
+                        st.info(f"Data: {data.shape[0]} rows | Min samples needed per split: {min_samples_needed}")
+                        st.stop()  # Stop execution to prevent further issues
+                    
+                    # Training ratio input with adaptive default value
+                    default_train = min(0.8, max_train_ratio)  # Try for 80% but respect maximum
+                    train_ratio = st.number_input(
+                        "Training Set Ratio", 
+                        min_value=0.1, 
+                        max_value=float(max_train_ratio), 
+                        value=default_train,
+                        step=0.05 if max_train_ratio > 0.2 else 0.01,
+                        format="%.2f",
+                        key="linear_train_ratio",
+                        help = f"Maximum value: {max_train_ratio:.2f} (ensures validation and test sets have enough samples)"
+                    )
+                    
+                    # Calculate remaining ratio for validation and test
+                    remaining_ratio = 1.0 - train_ratio
+                    
+                    # Validation ratio input with proper constraints
+                    max_val_ratio = remaining_ratio - min_ratio_needed  # Ensure test set gets minimum
+                    default_val = min(0.1, max_val_ratio)  # Try for 10% but respect maximum
+                    val_ratio = st.number_input(
+                        "Validation Set Ratio", 
+                        min_value=float(min_ratio_needed), 
+                        max_value=float(max_val_ratio),
+                        value=default_val,
+                        step=0.05 if max_val_ratio > 0.2 else 0.01,
+                        format="%.2f",
+                        key="linear_val_ratio",
+                        help=f"Maximum value: {max_val_ratio:.2f} (ensures test set gets minimum samples)"
+                    )
+                    
+                    # Calculate and display test ratio
+                    test_ratio = 1.0 - train_ratio - val_ratio
+                    st.write(f"Test Set Ratio: {test_ratio:.2f}")
+
+                except Exception as e:
+                    st.error(f"Dataset splitting error: {str(e)}")
+                    st.warning("Please adjust input/output lengths or check your dataset dimensions.")
             
             col1, col2, col3 = st.columns(3)
 
@@ -1312,13 +1398,56 @@ def run():
                             loss_info = get_loss_info(loss_class)
                             st.info(f"**Description:** {loss_info['description']}")
                     
-                    # Dataset splits
-                    train_ratio = st.number_input("Training Set Ratio", min_value=0.1, max_value=0.9, value=0.8, 
-                                                  step=0.05, key="custom_train_ratio")
-                    val_ratio = st.number_input("Validation Set Ratio", min_value=0.0, max_value=0.3, value=0.1,
-                                                 step=0.05, key="custom_val_ratio")
-                    test_ratio = 1.0 - train_ratio - val_ratio
-                    st.write(f"Test Set Ratio: {test_ratio:.2f}")
+                    try:
+                        # Calculate minimum required samples for validation and test sets
+                        min_samples_needed = input_length + output_length
+                        min_ratio_needed = min_samples_needed / data.shape[0]
+                        
+                        # Maximum training ratio ensuring validation and test sets have minimum samples
+                        max_train_ratio = 1.0 - (2 * min_ratio_needed)
+                        
+                        if max_train_ratio < 0.1:
+                            st.error(f"Not enough data for proper splitting with current parameters.")
+                            st.info(f"Data: {data.shape[0]} rows | Min samples needed per split: {min_samples_needed}")
+                            st.stop()  # Stop execution to prevent further issues
+                        
+                        # Training ratio input with adaptive default value
+                        default_train = min(0.8, max_train_ratio)  # Try for 80% but respect maximum
+                        train_ratio = st.number_input(
+                            "Training Set Ratio", 
+                            min_value=0.1, 
+                            max_value=float(max_train_ratio), 
+                            value=default_train,
+                            step=0.05 if max_train_ratio > 0.2 else 0.01,
+                            format="%.2f",
+                            key="custom_train_ratio",
+                            help = f"Maximum value: {max_train_ratio:.2f} (ensures validation and test sets have enough samples)"
+                        )
+                        
+                        # Calculate remaining ratio for validation and test
+                        remaining_ratio = 1.0 - train_ratio
+                        
+                        # Validation ratio input with proper constraints
+                        max_val_ratio = remaining_ratio - min_ratio_needed  # Ensure test set gets minimum
+                        default_val = min(0.1, max_val_ratio)  # Try for 10% but respect maximum
+                        val_ratio = st.number_input(
+                            "Validation Set Ratio", 
+                            min_value=float(min_ratio_needed), 
+                            max_value=float(max_val_ratio),
+                            value=default_val,
+                            step=0.05 if max_val_ratio > 0.2 else 0.01,
+                            format="%.2f",
+                            key="custom_val_ratio",
+                            help=f"Maximum value: {max_val_ratio:.2f} (ensures test set gets minimum samples)"
+                        )
+                        
+                        # Calculate and display test ratio
+                        test_ratio = 1.0 - train_ratio - val_ratio
+                        st.write(f"Test Set Ratio: {test_ratio:.2f}")
+
+                    except Exception as e:
+                        st.error(f"Dataset splitting error: {str(e)}")
+                        st.warning("Please adjust input/output lengths or check your dataset dimensions.")
                 
                 # Early stopping parameters
                 use_early_stopping = st.checkbox("Use Early Stopping", value=True, key="custom_early_stopping")
@@ -1410,13 +1539,56 @@ def run():
                             st.info(f"**Description:** {loss_info['description']}")
                     
                 with col2:
-                    # Dataset splits
-                    train_ratio = st.number_input("Training Set Ratio", min_value=0.5, max_value=0.9, value=0.7, 
-                                                  step=0.05, key="custom_linear_train_ratio")
-                    val_ratio = st.number_input("Validation Set Ratio", min_value=0.0, max_value=0.3, value=0.15,
-                                                 step=0.05, key="custom_linear_val_ratio")
-                    test_ratio = 1.0 - train_ratio - val_ratio
-                    st.write(f"Test Set Ratio: {test_ratio:.2f}")
+                    try:
+                        # Calculate minimum required samples for validation and test sets
+                        min_samples_needed = input_length + output_length
+                        min_ratio_needed = min_samples_needed / data.shape[0]
+                        
+                        # Maximum training ratio ensuring validation and test sets have minimum samples
+                        max_train_ratio = 1.0 - (2 * min_ratio_needed)
+                        
+                        if max_train_ratio < 0.1:
+                            st.error(f"Not enough data for proper splitting with current parameters.")
+                            st.info(f"Data: {data.shape[0]} rows | Min samples needed per split: {min_samples_needed}")
+                            st.stop()  # Stop execution to prevent further issues
+                        
+                        # Training ratio input with adaptive default value
+                        default_train = min(0.8, max_train_ratio)  # Try for 80% but respect maximum
+                        train_ratio = st.number_input(
+                            "Training Set Ratio", 
+                            min_value=0.1, 
+                            max_value=float(max_train_ratio), 
+                            value=default_train,
+                            step=0.05 if max_train_ratio > 0.2 else 0.01,
+                            format="%.2f",
+                            key="custom_linear_train_ratio",
+                            help = f"Maximum value: {max_train_ratio:.2f} (ensures validation and test sets have enough samples)"
+                        )
+                        
+                        # Calculate remaining ratio for validation and test
+                        remaining_ratio = 1.0 - train_ratio
+                        
+                        # Validation ratio input with proper constraints
+                        max_val_ratio = remaining_ratio - min_ratio_needed  # Ensure test set gets minimum
+                        default_val = min(0.1, max_val_ratio)  # Try for 10% but respect maximum
+                        val_ratio = st.number_input(
+                            "Validation Set Ratio", 
+                            min_value=float(min_ratio_needed), 
+                            max_value=float(max_val_ratio),
+                            value=default_val,
+                            step=0.05 if max_val_ratio > 0.2 else 0.01,
+                            format="%.2f",
+                            key="custom_linear_val_ratio",
+                            help=f"Maximum value: {max_val_ratio:.2f} (ensures test set gets minimum samples)"
+                        )
+                        
+                        # Calculate and display test ratio
+                        test_ratio = 1.0 - train_ratio - val_ratio
+                        st.write(f"Test Set Ratio: {test_ratio:.2f}")
+
+                    except Exception as e:
+                        st.error(f"Dataset splitting error: {str(e)}")
+                        st.warning("Please adjust input/output lengths or check your dataset dimensions.")
                     
                 col1, col2, col3 = st.columns(3)
                 
