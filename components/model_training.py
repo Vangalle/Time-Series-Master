@@ -135,6 +135,8 @@ class Transformer(nn.Module):
             assert input_dim == d_model, f"When use_projection=False, input_dim ({input_dim}) must equal d_model ({d_model})"
 
         # Position encoding configuration
+        self.middle_projection = nn.Linear(input_dim, output_dim)
+        self.autoregressive_projection = nn.Linear(output_dim, d_model)
         self.encoding_type = encoding_type.lower()  # 'sinusoidal' or 'learned'
         self.d_model = d_model
         
@@ -268,8 +270,11 @@ class Transformer(nn.Module):
         
         # Autoregressive mode (inference)
         else:
+            # st.write(f"Shape of features: {features.shape}")
             # Start with last timestep from features as initial decoder input
             current_input = features[:, -1:, :]  
+            current_input = self.middle_projection(current_input)  # [batch_size, 1, output_dim]
+            # st.write(f"Shape of current_input: {current_input.shape}")
             
             # Container for predictions
             predictions = []
@@ -278,7 +283,8 @@ class Transformer(nn.Module):
             for i in range(self.output_length):
                 # Project to embedding space if needed
                 if self.use_projection:
-                    decoder_input = self.input_projection(current_input)
+                    # st.write(f"Shape of current_input: {current_input.shape}")
+                    decoder_input = self.autoregressive_projection(current_input)
                 else:
                     decoder_input = current_input
                     
@@ -296,7 +302,9 @@ class Transformer(nn.Module):
                 decoder_output = self.transformer_decoder(tgt=decoder_input, memory=output)
                 
                 # Apply output projection directly to decoder output
+                # st.write(f"Shape of decoder_output: {decoder_output.shape}")
                 next_prediction = self.output_projection(decoder_output)
+                # st.write(f"Shape of next_prediction: {next_prediction.shape}")
                 
                 # Store prediction
                 predictions.append(next_prediction)

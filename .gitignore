@@ -3,3 +3,5 @@ __pycache__/
 *$py.class
 /exports/*
 !/exports/.gitkeep
+/models/*
+!/models/.gitkeep
