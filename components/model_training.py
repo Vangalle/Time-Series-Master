@@ -805,7 +805,8 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
     return best_model, training_history
 
 # Function to evaluate the model
-def evaluate_model(model, test_loader, criterion, device, target_vars, uses_positional_encoding=False, custom_metrics=None):
+def evaluate_model(model, test_loader, criterion, device, target_vars, norm_params,
+                   uses_positional_encoding=False, custom_metrics=None):
     model.eval()
     test_loss = 0.0
     predictions = []
@@ -848,8 +849,12 @@ def evaluate_model(model, test_loader, criterion, device, target_vars, uses_posi
                 for i in range(num_targets):
                     target_pred = predictions[:, :, i].flatten()
                     target_actual = actuals[:, :, i].flatten()
-                    target_metrics[i] = metric_func(target_actual, target_pred)
-                
+
+                    denorm_predictions = denormalize_data(target_pred, norm_params['y_mean'][i], norm_params['y_std'][i])
+                    denorm_actuals = denormalize_data(target_actual, norm_params['y_mean'][i], norm_params['y_std'][i])
+
+                    target_metrics[i] = metric_func(denorm_actuals, denorm_predictions)
+
                 # # Average the metrics across all targets
                 # metrics_results[metric_name] = np.mean(target_metrics)
                 
@@ -1946,9 +1951,13 @@ def run():
             # Evaluate on test set
             test_loss, predictions, actuals, metrics_results = evaluate_model(
                 model, test_loader, criterion, device, st.session_state.target_vars,
-                uses_positional_encoding=st.session_state.uses_positional_encoding, 
+                norm_params=norm_params,
+                uses_positional_encoding=st.session_state.uses_positional_encoding,
                 custom_metrics=selected_metrics
             )
+
+            st.write(f"Shape of predictions: {predictions.shape}")
+            st.write(f"Shape of actuals: {actuals.shape}")
             
             # Reshape predictions and actuals to original dimensions
             predictions = predictions.reshape(-1, output_length, len(target_vars))

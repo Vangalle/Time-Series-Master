@@ -317,6 +317,8 @@ def run():
                 range(len(target_vars)),
                 format_func=lambda x: target_vars[x]
             )
+        else:
+            target_var_idx = 0
         
         # Prepare data for metrics calculation across ALL time steps
         if predictions.ndim == 3:  # Multi-step prediction
