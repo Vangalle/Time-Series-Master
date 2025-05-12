@@ -209,6 +209,10 @@ def run():
                 categorical_inputs = []
             
             # Combine all selected inputs
+            if len(datetime_inputs) == 0:
+                st.session_state.datetime_column = False
+            else:
+                st.session_state.datetime_column = True
             selected_inputs = numeric_inputs + datetime_inputs + categorical_inputs
             st.session_state.input_vars = selected_inputs
             
@@ -402,7 +406,7 @@ def run():
                 os.makedirs("configs", exist_ok=True)
                 
                 # Save configuration to a JSON file
-                config_file = f"configs/config_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+                config_file = f"configs/config_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
                 with open(config_file, "w") as f:
                     json.dump(st.session_state.config, f, indent=4)
                 

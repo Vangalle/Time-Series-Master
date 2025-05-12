@@ -1,0 +1,14 @@
+{
+    "file_name": "xxxx.csv",
+    "input_variables": [
+        "wave height",
+        "period",
+        "wave_direction",
+        "date"
+    ],
+    "target_variables": [
+        "wave height",
+        "period",
+        "wave_direction"
+    ]
+}

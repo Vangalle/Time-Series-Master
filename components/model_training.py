@@ -30,165 +30,567 @@ if custom_losses:
 
 # Default model definitions
 class SimpleRNN(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, num_layers, dropout=0.2):
+    def __init__(self, input_dim, hidden_dim, output_dim, num_layers, input_length, output_length, dropout=0.5):
         super(SimpleRNN, self).__init__()
-        self.hidden_dim = hidden_dim
-        self.num_layers = num_layers
+
+        self.output_dim = output_dim
+        self.output_length = output_length
         
-        self.rnn = nn.RNN(input_dim, hidden_dim, num_layers, 
-                          batch_first=True, dropout=dropout if num_layers > 1 else 0)
-        self.fc = nn.Linear(hidden_dim, output_dim)
+        # Encoder RNN
+        self.rnn1 = nn.RNN(input_dim, hidden_dim * output_dim, batch_first=True, dropout=dropout)
+        self.rnn2 = nn.RNN(hidden_dim * output_dim, hidden_dim * output_dim, batch_first=True, dropout=dropout)
+        if output_dim == 1:
+            self.dense = nn.Linear(hidden_dim * output_dim, output_length)
+        else:
+            self.dense = nn.Linear(hidden_dim * output_dim * input_length, output_dim * output_length)
         
     def forward(self, x):
-        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_dim).to(x.device)
-        out, _ = self.rnn(x, h0)
-        out = self.fc(out[:, -1, :])
-        return out
+        
+        x, _ = self.rnn1(x)
+        x, _ = self.rnn2(x)
+        if self.output_dim == 1:
+            x = self.dense(x[:, -1, :])
+            x = x.unsqueeze(-1)
+        else:
+            batch_size, seq_length, hidden_dim = x.size()
+            x = x.reshape(batch_size, seq_length * hidden_dim)
+            x = self.dense(x)
+            x = x. reshape(batch_size, self.output_length, self.output_dim)
+        
+        return x
 
 class LSTM(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, num_layers, dropout=0.2):
+    def __init__(self, input_dim, hidden_dim, output_dim, num_layers, input_length, output_length, dropout=0.5):
         super(LSTM, self).__init__()
-        self.hidden_dim = hidden_dim
-        self.num_layers = num_layers
+
+        self.output_dim = output_dim
+        self.output_length = output_length
         
-        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, 
-                           batch_first=True, dropout=dropout if num_layers > 1 else 0)
-        self.fc = nn.Linear(hidden_dim, output_dim)
+        # Encoder LSTM
+        self.lstm1 = nn.LSTM(input_dim, hidden_dim * output_dim, batch_first=True, dropout=dropout)
+        self.lstm2 = nn.LSTM(hidden_dim * output_dim, hidden_dim * output_dim, batch_first=True, dropout=dropout)
+        if output_dim == 1:
+            self.dense = nn.Linear(hidden_dim * output_dim, output_length)
+        else:
+            self.dense = nn.Linear(hidden_dim * output_dim * input_length, output_dim * output_length)
         
     def forward(self, x):
-        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_dim).to(x.device)
-        c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_dim).to(x.device)
-        out, _ = self.lstm(x, (h0, c0))
-        out = self.fc(out[:, -1, :])
-        return out
+        
+        x, _ = self.lstm1(x)
+        x, _ = self.lstm2(x)
+        if self.output_dim == 1:
+            x = self.dense(x[:, -1, :])
+            x = x.unsqueeze(-1)
+        else:
+            batch_size, seq_length, hidden_dim = x.size()
+            x = x.reshape(batch_size, seq_length * hidden_dim)
+            x = self.dense(x)
+            x = x. reshape(batch_size, self.output_length, self.output_dim)
+        
+        return x
 
 class GRU(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, num_layers, dropout=0.2):
+    def __init__(self, input_dim, hidden_dim, output_dim, num_layers, input_length, output_length, dropout=0.5):
         super(GRU, self).__init__()
-        self.hidden_dim = hidden_dim
-        self.num_layers = num_layers
-        
-        self.gru = nn.GRU(input_dim, hidden_dim, num_layers, 
-                         batch_first=True, dropout=dropout if num_layers > 1 else 0)
-        self.fc = nn.Linear(hidden_dim, output_dim)
-        
-    def forward(self, x):
-        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_dim).to(x.device)
-        out, _ = self.gru(x, h0)
-        out = self.fc(out[:, -1, :])
-        return out
 
-class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, max_seq_length=5000, dropout=0.1):
-        super().__init__()
-        self.dropout = nn.Dropout(p=dropout)
+        self.output_dim = output_dim
+        self.output_length = output_length
         
-        # Create positional encoding matrix
-        pe = torch.zeros(max_seq_length, d_model)
-        position = torch.arange(0, max_seq_length, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-        
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0)
-        
-        self.register_buffer('pe', pe)
+        # Encoder GRU
+        self.gru1 = nn.GRU(input_dim, hidden_dim * output_dim, batch_first=True, dropout=dropout)
+        self.gru2 = nn.GRU(hidden_dim * output_dim, hidden_dim * output_dim, batch_first=True, dropout=dropout)
+        if output_dim == 1:
+            self.dense = nn.Linear(hidden_dim * output_dim, output_length)
+        else:
+            self.dense = nn.Linear(hidden_dim * output_dim * input_length, output_dim * output_length)
         
     def forward(self, x):
-        x = x + self.pe[:, :x.size(1), :]
-        return self.dropout(x)
+        
+        x, _ = self.gru1(x)
+        x, _ = self.gru2(x)
+        if self.output_dim == 1:
+            x = self.dense(x[:, -1, :])
+            x = x.unsqueeze(-1)
+        else:
+            batch_size, seq_length, hidden_dim = x.size()
+            x = x.reshape(batch_size, seq_length * hidden_dim)
+            x = self.dense(x)
+            x = x. reshape(batch_size, self.output_length, self.output_dim)
+        
+        return x
 
 class Transformer(nn.Module):
-    def __init__(self, input_dim, d_model=64, hidden_dim=256, output_dim=1, 
-                 num_layers=2, nhead=8, dropout=0.2, forecast_horizon=1,
-                 use_projection=True, use_causal_mask=True):
-        super(Transformer, self).__init__()
+    def __init__(self, input_dim, d_model, nhead, num_layers, hidden_dim, output_dim,
+                 input_length, output_length, max_seq_length=5000, encoding_type='sinusoidal',
+                 use_projection=True):
         
-        # Input projection layer (if original dimension is small)
+        self.input_length = input_length
+        self.output_length = output_length
+
+        super().__init__()
+        
+        # Ensure d_model is divisible by nhead
+        assert d_model % nhead == 0, f"d_model ({d_model}) must be divisible by num_heads ({nhead})"
+        
+        # Feature projection
         self.use_projection = use_projection
         if use_projection:
             self.input_projection = nn.Linear(input_dim, d_model)
-            model_dim = d_model
         else:
-            model_dim = input_dim
-            assert model_dim % nhead == 0, f"Model dimension ({model_dim}) must be divisible by num_heads ({nhead})"
+            # If not using projection, input_dim must equal d_model
+            assert input_dim == d_model, f"When use_projection=False, input_dim ({input_dim}) must equal d_model ({d_model})"
+
+        # Position encoding configuration
+        self.encoding_type = encoding_type.lower()  # 'sinusoidal' or 'learned'
+        self.d_model = d_model
         
-        # Positional encoding
-        self.pos_encoder = PositionalEncoding(model_dim, dropout=dropout)
+        # Position embedding table (for learned embeddings)
+        if encoding_type.lower() == 'learned':
+            self.position_embedding = nn.Embedding(max_seq_length, d_model)
+            nn.init.normal_(self.position_embedding.weight, mean=0, std=0.02)  # Common in transformer models
         
         # Transformer encoder
-        self.encoder_layer = nn.TransformerEncoderLayer(
-            d_model=model_dim,
-            nhead=nhead,
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model, 
+            nhead=nhead, 
             dim_feedforward=hidden_dim,
-            dropout=dropout,
             batch_first=True
         )
-        
-        self.transformer_encoder = nn.TransformerEncoder(
-            self.encoder_layer,
-            num_layers=num_layers
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+
+        # Transformer decoder (if needed)
+        decoder_layer = nn.TransformerDecoderLayer(
+            d_model=d_model, 
+            nhead=nhead, 
+            dim_feedforward=hidden_dim,
+            batch_first=True
         )
+        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_layers)
         
-        # Output layers with support for multi-horizon forecasting
-        self.forecast_horizon = forecast_horizon
+        # Output projection for multivariate prediction
+        self.output_projection = nn.Linear(d_model, output_dim)
         
-        if forecast_horizon > 1:
-            # For multi-step forecasting, we'll use separate prediction head
-            self.output_layer = nn.Linear(model_dim, output_dim * forecast_horizon)
-        else:
-            # For single-step forecasting, simple linear layer
-            self.output_layer = nn.Linear(model_dim, output_dim)
+    def _get_sinusoidal_encoding(self, position_indices, d_model):
+        """
+        Create sinusoidal positional encodings using vectorized operations.
+        
+        Args:
+            position_indices: Tensor of shape [batch_size, seq_length]
+            d_model: Dimension of the model
             
-        self.use_causal_mask = use_causal_mask
-        self.output_dim = output_dim
+        Returns:
+            Tensor of shape [batch_size, seq_length, d_model]
+        """
+        device = position_indices.device
+
+        # Handle case where position_indices has 3 dimensions
+        if position_indices.dim() == 3:
+            # Extract just the first feature or use another appropriate strategy
+            position_indices = position_indices[:, :, 0]
         
-    def _generate_causal_mask(self, seq_len):
-        # Lower triangular mask to prevent attending to future time steps
-        mask = torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool()
-        return mask
+        # Create frequency tensor
+        div_term = torch.exp(torch.arange(0, d_model, 2, device=device) * 
+                        -(math.log(10000.0) / d_model))
         
-    def forward(self, x):
-        # x shape: [batch_size, seq_len, input_dim]
-        seq_len = x.size(1)
-        batch_size = x.size(0)
+        # Expand dimensions for broadcasting
+        pos = position_indices.unsqueeze(-1)  # [batch_size, seq_length, 1]
+        div_term = div_term.unsqueeze(0).unsqueeze(0)  # [1, 1, d_model/2]
         
-        # Apply input projection if specified
+        # Compute sine and cosine parts with broadcasting
+        sin_part = torch.sin(pos * div_term)
+        cos_part = torch.cos(pos * div_term)
+        
+        # Interleave sine and cosine components
+        position_enc = torch.zeros(position_indices.shape[0], position_indices.shape[1], 
+                                d_model, device=device)
+        
+        # Assign sin to even indices, cos to odd indices
+        position_enc[:, :, 0::2] = sin_part
+        position_enc[:, :, 1::2] = cos_part
+        
+        return position_enc
+    
+    def _generate_default_positions(self, batch_size, seq_length, device):
+        # Generate sequential position indices [0, 1, 2, ..., seq_length-1]
+        return torch.arange(0, seq_length, device=device).unsqueeze(0).expand(batch_size, -1)
+
+    def forward(self, features, position_indices=None, tgt=None):
+        batch_size, _, _ = features.shape
+        device = features.device
+        
+        # Project features if needed
         if self.use_projection:
-            x = self.input_projection(x)
-        
-        # Add positional encoding
-        x = self.pos_encoder(x)
-        
-        # Generate causal mask if needed
-        mask = self._generate_causal_mask(seq_len).to(x.device) if self.use_causal_mask else None
-        
-        # Apply transformer encoder
-        out = self.transformer_encoder(x, mask=mask)
-        
-        # Extract features from the last time step
-        last_hidden = out[:, -1, :]
-        
-        # Apply output layer
-        if self.forecast_horizon > 1:
-            # For multi-horizon forecasting
-            predictions = self.output_layer(last_hidden)
-            # Return flattened output to match other models
-            return predictions
+            x = self.input_projection(features)  # [batch_size, self.input_length, d_model]
         else:
-            # For single-step forecasting
-            return self.output_layer(last_hidden)
+            x = features  # Already in correct dimension
+
+        # Generate default position indices if not provided
+        if position_indices is None:
+            position_indices = self._generate_default_positions(batch_size, self.input_length, device)
+
+        # Get position encodings
+        if self.encoding_type == 'sinusoidal':
+            pos_encoding = self._get_sinusoidal_encoding(position_indices, self.d_model)
+        else:  # 'learned'
+            # st.write(f"Shape of position_indices: {position_indices.shape}")
+            if position_indices.dim() == 3:
+                position_indices = position_indices[:, :, 0]
+            pos_encoding = self.position_embedding(position_indices.long())
         
+        # Add position encodings to input
+        # st.write(f"X shape: {x.shape}, type: {x.dtype}")
+        # st.write(f"Pos_encoding shape: {pos_encoding.shape}, type: {pos_encoding.dtype}")
+        x = x + pos_encoding
+        
+        # Pass through transformer
+        output = self.transformer_encoder(x)
+
+        if tgt is not None:
+            if self.use_projection:
+                tgt = self.input_projection(tgt)
+            else:
+                tgt = tgt
+
+            batch_size, _, _ = tgt.shape
+            
+            # Generate default position indices if not provided
+            position_indices = self._generate_default_positions(batch_size, self.output_length, device)
+            
+            # Generate position encodings for target
+            if self.encoding_type == 'sinusoidal':
+                pos_encoding = self._get_sinusoidal_encoding(position_indices, self.d_model)
+            else:  # 'learned'
+                pos_encoding = self.position_embeddings[position_indices.long()]
+            
+            tgt = tgt + pos_encoding
+            
+            # Pass through transformer decoder
+            output = self.transformer_decoder(tgt=tgt, memory=output) # [batch_size, self.output_length, d_model]
+
+            # Project to output dimension for multivariate prediction
+            predictions = self.output_projection(output)
+            
+            return predictions
+        
+        # Autoregressive mode (inference)
+        else:
+            # Start with last timestep from features as initial decoder input
+            current_input = features[:, -1:, :]  
+            
+            # Container for predictions
+            predictions = []
+            
+            # Generate predictions step by step
+            for i in range(self.output_length):
+                # Project to embedding space if needed
+                if self.use_projection:
+                    decoder_input = self.input_projection(current_input)
+                else:
+                    decoder_input = current_input
+                    
+                # Create position encoding for current timestep
+                position_idx = torch.tensor([[self.input_length + i]], device=device).expand(batch_size, 1)
+                
+                if self.encoding_type == 'sinusoidal':
+                    pos_enc = self._get_sinusoidal_encoding(position_idx, self.d_model)
+                else:  # 'learned'
+                    pos_enc = self.position_embedding(position_idx.long())
+                    
+                decoder_input = decoder_input + pos_enc
+                
+                # Run through decoder with encoded inputs as memory
+                decoder_output = self.transformer_decoder(tgt=decoder_input, memory=output)
+                
+                # Apply output projection directly to decoder output
+                next_prediction = self.output_projection(decoder_output)
+                
+                # Store prediction
+                predictions.append(next_prediction)
+                
+                # Use prediction as input for next timestep
+                current_input = next_prediction
+            
+            # Concatenate all predictions along time dimension
+            final_predictions = torch.cat(predictions, dim=1)
+            
+            return final_predictions
+
+class EncoderTransformer(nn.Module):
+    def __init__(self, input_dim, d_model, nhead, num_layers, hidden_dim, output_dim,
+                 input_length, output_length, max_seq_length=5000, encoding_type='sinusoidal',
+                 use_projection=True):
+        
+        self.input_length = input_length
+        self.output_length = output_length
+        self.output_dim = output_dim
+
+        super().__init__()
+        
+        # Ensure d_model is divisible by nhead
+        assert d_model % nhead == 0, f"d_model ({d_model}) must be divisible by num_heads ({nhead})"
+        
+        # Feature projection
+        self.use_projection = use_projection
+        if use_projection:
+            self.input_projection = nn.Linear(input_dim, d_model)
+        else:
+            # If not using projection, input_dim must equal d_model
+            assert input_dim == d_model, f"When use_projection=False, input_dim ({input_dim}) must equal d_model ({d_model})"
+
+        # Position encoding configuration
+        self.encoding_type = encoding_type.lower()  # 'sinusoidal' or 'learned'
+        self.d_model = d_model
+        
+        # Position embedding table (for learned embeddings)
+        if encoding_type.lower() == 'learned':
+            self.position_embedding = nn.Embedding(max_seq_length, d_model)
+            nn.init.normal_(self.position_embedding.weight, mean=0, std=0.02)  # Common in transformer models
+        
+        # Transformer encoder
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model, 
+            nhead=nhead, 
+            dim_feedforward=hidden_dim,
+            batch_first=True
+        )
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        
+        # Output projection for multivariate prediction
+        self.output_projection = nn.Linear(d_model * input_length, output_dim * output_length)
+
+    def _get_sinusoidal_encoding(self, position_indices, d_model):
+        """
+        Create sinusoidal positional encodings using vectorized operations.
+        
+        Args:
+            position_indices: Tensor of shape [batch_size, seq_length]
+            d_model: Dimension of the model
+            
+        Returns:
+            Tensor of shape [batch_size, seq_length, d_model]
+        """
+        device = position_indices.device
+
+        # Handle case where position_indices has 3 dimensions
+        if position_indices.dim() == 3:
+            # Extract just the first feature or use another appropriate strategy
+            position_indices = position_indices[:, :, 0]
+        
+        # Create frequency tensor
+        div_term = torch.exp(torch.arange(0, d_model, 2, device=device) * 
+                        -(math.log(10000.0) / d_model))
+        
+        # Expand dimensions for broadcasting
+        pos = position_indices.unsqueeze(-1)  # [batch_size, seq_length, 1]
+        div_term = div_term.unsqueeze(0).unsqueeze(0)  # [1, 1, d_model/2]
+        
+        # Compute sine and cosine parts with broadcasting
+        sin_part = torch.sin(pos * div_term)
+        cos_part = torch.cos(pos * div_term)
+        
+        # Interleave sine and cosine components
+        position_enc = torch.zeros(position_indices.shape[0], position_indices.shape[1], 
+                                d_model, device=device)
+        
+        # Assign sin to even indices, cos to odd indices
+        position_enc[:, :, 0::2] = sin_part
+        position_enc[:, :, 1::2] = cos_part
+        
+        return position_enc
+    
+    def _generate_default_positions(self, batch_size, seq_length, device):
+        # Generate sequential position indices [0, 1, 2, ..., seq_length-1]
+        return torch.arange(0, seq_length, device=device).unsqueeze(0).expand(batch_size, -1)
+
+    def forward(self, features, position_indices=None, tgt=None):
+        batch_size, _, _ = features.shape
+        device = features.device
+        
+        # Project features if needed
+        if self.use_projection:
+            x = self.input_projection(features)  # [batch_size, self.input_length, d_model]
+        else:
+            x = features  # Already in correct dimension
+
+        # Generate default position indices if not provided
+        if position_indices is None:
+            position_indices = self._generate_default_positions(batch_size, self.input_length, device)
+
+        # Get position encodings
+        if self.encoding_type == 'sinusoidal':
+            pos_encoding = self._get_sinusoidal_encoding(position_indices, self.d_model)
+        else:  # 'learned'
+            # st.write(f"Shape of position_indices: {position_indices.shape}")
+            if position_indices.dim() == 3:
+                position_indices = position_indices[:, :, 0]
+            pos_encoding = self.position_embedding(position_indices.long())
+        
+        # Add position encodings to input
+        x = x + pos_encoding
+        
+        # Pass through transformer
+        output = self.transformer_encoder(x)
+
+        batch_size, _, _ = output.shape
+        output = output.reshape(batch_size, -1)
+
+        # Project to output dimension for multivariate prediction
+        predictions = self.output_projection(output)
+        predictions = predictions.reshape(batch_size, self.output_length, self.output_dim)
+        
+        return predictions
+
+class MultivariatePosEncTransformer(nn.Module):
+    def __init__(self, input_dim, d_model, nhead, num_layers, hidden_dim, output_dim,
+                 max_seq_length=5000, encoding_type='sinusoidal', use_projection=True):
+        super().__init__()
+        
+        # Basic validations
+        assert d_model % nhead == 0, f"d_model ({d_model}) must be divisible by num_heads ({nhead})"
+        
+        self.input_dim = input_dim
+        self.d_model = d_model
+        self.use_projection = use_projection
+        self.encoding_type = encoding_type
+        
+        # Input projection
+        if use_projection:
+            self.input_projection = nn.Linear(input_dim, d_model)
+        
+        # Variable-specific position embeddings
+        if encoding_type == 'learned':
+            # Create separate embedding tables for each variable
+            self.position_embeddings = nn.ModuleList([
+                nn.Embedding(max_seq_length, d_model // input_dim)
+                for _ in range(input_dim)
+            ])
+        
+        # Transformer encoder
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model, 
+            nhead=nhead, 
+            dim_feedforward=hidden_dim,
+            batch_first=True
+        )
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        
+        # Output projection
+        self.output_projection = nn.Linear(d_model, output_dim)
+    
+    def _get_variable_sinusoidal_encoding(self, position_indices, batch_size, seq_length):
+        """Create separate sinusoidal encodings for each variable"""
+        device = position_indices.device
+        
+        # Calculate the dimension allocated to each variable
+        var_dim = self.d_model // self.input_dim
+        
+        # Initialize the full position encoding tensor
+        full_position_enc = torch.zeros(batch_size, seq_length, self.d_model, device=device)
+        
+        # Generate different encodings for each variable
+        for var_idx in range(self.input_dim):
+            # Calculate offset for this variable in the embedding dimension
+            start_dim = var_idx * var_dim
+            end_dim = start_dim + var_dim
+            
+            # Create sinusoidal encoding for this variable
+            div_term = torch.exp(torch.arange(0, var_dim, 2, device=device) * 
+                               -(math.log(10000.0) / var_dim))
+            
+            # Apply potentially different position indices for each variable
+            var_positions = position_indices
+            
+            # For each batch and position
+            for b in range(batch_size):
+                for i in range(seq_length):
+                    pos = var_positions[b, i].item()
+                    
+                    # Handle odd-sized dimensions
+                    actual_dim = min(var_dim, end_dim - start_dim)
+                    actual_even_dims = actual_dim - (actual_dim % 2)
+                    
+                    # Apply sinusoidal encoding
+                    if actual_even_dims > 0:
+                        full_position_enc[b, i, start_dim:start_dim+actual_even_dims:2] = torch.sin(pos * div_term[:actual_even_dims//2])
+                        full_position_enc[b, i, start_dim+1:start_dim+actual_even_dims:2] = torch.cos(pos * div_term[:actual_even_dims//2])
+                    
+                    # Handle the remaining dimension if odd
+                    if actual_dim % 2 == 1 and actual_dim > 0:
+                        full_position_enc[b, i, end_dim-1] = torch.sin(pos * div_term[-1])
+            
+        return full_position_enc
+    
+    def _generate_default_positions(self, batch_size, seq_length, device):
+        # Default sequential positions
+        return torch.arange(0, seq_length, device=device).unsqueeze(0).expand(batch_size, -1)
+    
+    def forward(self, features, position_indices=None, variable_positions=None):
+        batch_size, seq_length, _ = features.shape
+        device = features.device
+        
+        # Project input features if needed
+        if self.use_projection:
+            x = self.input_projection(features)
+        else:
+            x = features
+        
+        # Generate default position indices if not provided
+        if position_indices is None:
+            position_indices = self._generate_default_positions(batch_size, seq_length, device)
+        
+        # Generate position encodings
+        if self.encoding_type == 'sinusoidal':
+            # Create variable-specific sinusoidal encodings
+            pos_encoding = self._get_variable_sinusoidal_encoding(
+                position_indices, batch_size, seq_length)
+        else:  # 'learned'
+            # Initialize full position encoding tensor
+            pos_encoding = torch.zeros(batch_size, seq_length, self.d_model, device=device)
+            
+            # Calculate var dimension
+            var_dim = self.d_model // self.input_dim
+            
+            # Apply learned embeddings for each variable
+            for var_idx in range(self.input_dim):
+                var_pos = variable_positions[var_idx] if variable_positions else position_indices
+                embedding = self.position_embeddings[var_idx](var_pos)
+                start_dim = var_idx * var_dim
+                end_dim = start_dim + var_dim
+                pos_encoding[:, :, start_dim:end_dim] = embedding
+        
+        # Add position encodings to input
+        x = x + pos_encoding
+        
+        # Pass through transformer
+        output = self.transformer_encoder(x)
+        
+        # Project to output dimension
+        predictions = self.output_projection(output)
+        
+        return predictions
+
 class LinearModel(nn.Module):
-    def __init__(self, input_dim, output_dim):
+    def __init__(self, input_dim, output_dim, input_length, output_length,):
         super(LinearModel, self).__init__()
-        self.flatten = nn.Flatten()
-        self.linear = nn.Linear(input_dim, output_dim)
+        self.output_dim = output_dim
+        self.output_length = output_length
+
+        if output_dim == 1:
+            self.dense = nn.Linear(input_dim, output_length)
+        else:
+            self.dense = nn.Linear(input_dim * input_length, output_dim * output_length)
         
     def forward(self, x):
-        x = self.flatten(x)
-        out = self.linear(x)
-        return out
+        
+        if self.output_dim == 1:
+            x = self.dense(x[:, -1, :])
+            x = x.unsqueeze(-1)
+        else:
+            batch_size, seq_length, hidden_dim = x.size()
+            x = x.reshape(batch_size, seq_length * hidden_dim)
+            x = self.dense(x)
+            x = x. reshape(batch_size, self.output_length, self.output_dim)
+        return x
 
 # Function to prepare time series data
 def prepare_time_series_data(data, input_vars, target_vars, input_length, output_length):
@@ -201,17 +603,20 @@ def prepare_time_series_data(data, input_vars, target_vars, input_length, output
         target_vars: List of target variable names
         input_length: Length of input sequence
         output_length: Length of output sequence
-        
+    
     Returns:
-        X, y, norm_params
+        X_data: Input data for the model 
+        X_pos: Position Encoding data
+        y_data: Target data
+        norm_params: Normalization parameters
     """
     # Create a copy of input data
     processed_data = data.copy()
-    
+
     # Identify datetime columns
     datetime_cols = []
     numeric_cols = []
-    
+
     for col in input_vars:
         if pd.api.types.is_datetime64_any_dtype(data[col]):
             datetime_cols.append(col)
@@ -222,63 +627,74 @@ def prepare_time_series_data(data, input_vars, target_vars, input_length, output
     datetime_features = {}
     
     for col in datetime_cols:
-        # Extract datetime components as separate features
+        # Get the datetime series
         dt_series = data[col]
         col_prefix = f"{col}_"
         
-        # Add cyclical encoding for day of week (sin and cos transformation)
-        day_of_week = dt_series.dt.dayofweek
-        processed_data[col_prefix + 'day_of_week_sin'] = np.sin(2 * np.pi * day_of_week / 7)
-        processed_data[col_prefix + 'day_of_week_cos'] = np.cos(2 * np.pi * day_of_week / 7)
+        # Get unique datetime values and sort them
+        unique_dt = np.sort(dt_series.unique())
         
-        # Add cyclical encoding for month
-        month = dt_series.dt.month
-        processed_data[col_prefix + 'month_sin'] = np.sin(2 * np.pi * month / 12)
-        processed_data[col_prefix + 'month_cos'] = np.cos(2 * np.pi * month / 12)
+        # If there are no datetime values or only one value, add a default index
+        if len(unique_dt) <= 1:
+            processed_data[col_prefix + 'continuous_index'] = 0
+            datetime_features[col] = [col_prefix + 'continuous_index']
+            continue
         
-        # Add cyclical encoding for hour
-        if dt_series.dt.hour.nunique() > 1:
-            hour = dt_series.dt.hour
-            processed_data[col_prefix + 'hour_sin'] = np.sin(2 * np.pi * hour / 24)
-            processed_data[col_prefix + 'hour_cos'] = np.cos(2 * np.pi * hour / 24)
+        # Calculate time differences in seconds
+        time_diffs_seconds = np.array([(unique_dt[i+1] - unique_dt[i]).astype('timedelta64[s]').astype(int) 
+                                    for i in range(len(unique_dt)-1)])
         
-        # Add year as a linear feature (normalized)
-        year = dt_series.dt.year
-        year_min = year.min()
-        year_max = year.max()
-        if year_max > year_min:
-            processed_data[col_prefix + 'year'] = (year - year_min) / (year_max - year_min)
+        # Get the smallest non-zero time difference
+        min_diff_seconds = min(td for td in time_diffs_seconds if td > 0)
         
-        # Add day of year as cyclical feature
-        day_of_year = dt_series.dt.dayofyear
-        processed_data[col_prefix + 'day_of_year_sin'] = np.sin(2 * np.pi * day_of_year / 365.25)
-        processed_data[col_prefix + 'day_of_year_cos'] = np.cos(2 * np.pi * day_of_year / 365.25)
+        # Determine the time unit based on the smallest difference
+        if min_diff_seconds < 60:  # Less than a minute
+            unit_divisor = 1
+        elif min_diff_seconds < 3600:  # Less than an hour
+            unit_divisor = 60
+        elif min_diff_seconds < 86400:  # Less than a day
+            unit_divisor = 3600
+        else:
+            unit_divisor = 86400
         
-        # Track the new feature names
-        new_features = [
-            col_prefix + 'day_of_week_sin', col_prefix + 'day_of_week_cos',
-            col_prefix + 'month_sin', col_prefix + 'month_cos',
-            col_prefix + 'day_of_year_sin', col_prefix + 'day_of_year_cos'
-        ]
+        # Create an array of continuous indices
+        continuous_indices = np.zeros(len(unique_dt), dtype=int)
         
-        if dt_series.dt.hour.nunique() > 1:
-            new_features.extend([col_prefix + 'hour_sin', col_prefix + 'hour_cos'])
+        # Calculate the continuous index
+        for i in range(1, len(unique_dt)):
+            time_diff_seconds = (unique_dt[i] - unique_dt[i-1]).astype('timedelta64[s]').astype(int)
+            units_to_advance = max(1, round(time_diff_seconds / unit_divisor))
+            continuous_indices[i] = continuous_indices[i-1] + units_to_advance
         
-        if year_max > year_min:
-            new_features.append(col_prefix + 'year')
+        # Create a DataFrame with unique datetime values and their continuous indices
+        dt_index_df = pd.DataFrame({
+            'datetime': unique_dt,
+            'continuous_index': continuous_indices
+        })
         
-        datetime_features[col] = new_features
+        # Convert the original datetime series to a DataFrame and merge with dt_index_df
+        temp_df = pd.DataFrame({'datetime': dt_series})
+        temp_df = pd.merge(temp_df, dt_index_df, on='datetime', how='left')
+        
+        # Add the continuous index to processed_data
+        processed_data[col_prefix + 'continuous_index'] = temp_df['continuous_index']
+        
+        # Track the new feature name
+        datetime_features[col] = [col_prefix + 'continuous_index']
     
     # Replace datetime columns with their numeric representations
     transformed_input_vars = []
+    datetime_embedding_cols = []
     for var in input_vars:
         if var in datetime_cols:
-            transformed_input_vars.extend(datetime_features[var])
+            datetime_embedding_cols.extend(datetime_features[var])
         else:
             transformed_input_vars.append(var)
     
     # Extract data for transformed input variables and targets
+    # st.write(f"columns: {transformed_input_vars}")
     X_data = processed_data[transformed_input_vars].values
+    X_pos = processed_data[datetime_embedding_cols].values
     y_data = data[target_vars].values
     
     # Standardize the data (only numeric data)
@@ -300,17 +716,13 @@ def prepare_time_series_data(data, input_vars, target_vars, input_length, output
         'transformed_input_vars': transformed_input_vars
     }
     
-    # Create sequences
-    X, y = [], []
-    for i in range(len(X_data) - input_length - output_length + 1):
-        X.append(X_data[i:i+input_length])
-        y.append(y_data[i+input_length:i+input_length+output_length])
-    
-    return np.array(X), np.array(y), norm_params
+    return X_data, X_pos, y_data, norm_params
 
 # Function to train the model
+# Modify the train_model function to accept position data
 def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, 
-               device, epochs, patience, loss_chart, progress_bar, status_text, verbose=True):
+               device, epochs, patience, loss_chart, progress_bar, status_text, 
+               uses_positional_encoding=False, verbose=True):
     best_val_loss = float('inf')
     best_model = None
     patience_counter = 0
@@ -323,27 +735,45 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
         # Training phase
         model.train()
         train_loss = 0.0
-        for inputs, targets in train_loader:
-            inputs, targets = inputs.to(device), targets.to(device)
+        for batch in train_loader:
+            if uses_positional_encoding:
+                inputs, positions, targets = [b.to(device) for b in batch]
+            else:
+                inputs, targets = batch
+                inputs, targets = inputs.to(device), targets.to(device)
             
             optimizer.zero_grad()
-            outputs = model(inputs)
+            
+            # Forward pass with or without positions
+            if uses_positional_encoding:
+                outputs = model(inputs, positions, targets)
+            else:
+                outputs = model(inputs)
+                
             loss = criterion(outputs, targets)
             loss.backward()
             optimizer.step()
             
             train_loss += loss.item()
         
+        
         train_loss /= len(train_loader)
         training_history['train_loss'].append(train_loss)
         
         # Validation phase
+        # Validation phase
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
-            for inputs, targets in val_loader:
-                inputs, targets = inputs.to(device), targets.to(device)
-                outputs = model(inputs)
+            for batch in val_loader:
+                if uses_positional_encoding:
+                    inputs, positions, targets = [b.to(device) for b in batch]
+                    outputs = model(inputs, positions)
+                else:
+                    inputs, targets = batch
+                    inputs, targets = inputs.to(device), targets.to(device)
+                    outputs = model(inputs)
+                    
                 loss = criterion(outputs, targets)
                 val_loss += loss.item()
         
@@ -381,16 +811,26 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
     return best_model, training_history
 
 # Function to evaluate the model
-def evaluate_model(model, test_loader, criterion, device, custom_metrics=None):
+def evaluate_model(model, test_loader, criterion, device, target_vars, uses_positional_encoding=False, custom_metrics=None):
     model.eval()
     test_loss = 0.0
     predictions = []
     actuals = []
     
     with torch.no_grad():
-        for inputs, targets in test_loader:
-            inputs, targets = inputs.to(device), targets.to(device)
-            outputs = model(inputs)
+        for batch in test_loader:
+            if uses_positional_encoding:
+                inputs, positions, targets = [b.to(device) for b in batch]
+            else:
+                inputs, targets = batch
+                inputs, targets = inputs.to(device), targets.to(device)
+            
+            # Forward pass with or without positions
+            if uses_positional_encoding:
+                outputs = model(inputs, positions)
+            else:
+                outputs = model(inputs)
+                
             loss = criterion(outputs, targets)
             test_loss += loss.item()
             
@@ -400,13 +840,29 @@ def evaluate_model(model, test_loader, criterion, device, custom_metrics=None):
     test_loss /= len(test_loader)
     predictions = np.vstack(predictions)
     actuals = np.vstack(actuals)
+    num_targets = actuals.shape[-1]
     
     # Calculate additional metrics if provided
-    metrics_results = {}
+    metrics_results = {target_var: {} for target_var in target_vars}
     if custom_metrics:
         for metric_name, metric_func in custom_metrics.items():
             try:
-                metrics_results[metric_name] = metric_func(actuals, predictions)
+                # Initialize array to store metric values for each target
+                target_metrics = np.zeros(num_targets)
+                
+                # Calculate metric for each target variable
+                for i in range(num_targets):
+                    target_pred = predictions[:, :, i].flatten()
+                    target_actual = actuals[:, :, i].flatten()
+                    target_metrics[i] = metric_func(target_actual, target_pred)
+                
+                # # Average the metrics across all targets
+                # metrics_results[metric_name] = np.mean(target_metrics)
+                
+                for i in range(num_targets):
+                    metrics_results[f"{target_vars[i]}"][f"{metric_name}"] = target_metrics[i]
+                    # metrics_results[f"{metric_name} of {target_vars[i]}"] = target_metrics[i]
+
             except Exception as e:
                 st.warning(f"Error calculating metric {metric_name}: {str(e)}")
                 metrics_results[metric_name] = float('nan')
@@ -533,17 +989,19 @@ def run():
                 # Model type selection
                 dl_model_type = st.selectbox(
                     "Select Model Type",
-                    ["LSTM", "GRU", "RNN", "Transformer"]
+                    ["LSTM", "GRU", "RNN", "Transformer", "EncoderTransformer"],
                 )
                 
                 # Model depth selection
                 num_layers = st.number_input("Number of Layers", min_value=1, max_value=20, value=2, step=1)
                 
                 # Hidden dimension selection
-                hidden_dim = st.number_input("Hidden Dimension", min_value=32, max_value=2048, value=64, step=32)
+                hidden_dim = st.number_input("Hidden Dimension", min_value=32, max_value=2048, value=64, step=32,
+                                             help="For Transformer models, it's the FFN dimension and is " \
+                                             "often set to 4 times the d_model.")
 
                 # If Transformer model is selected, add num_heads parameter
-                if dl_model_type == "Transformer":
+                if dl_model_type == "Transformer" or dl_model_type == "EncoderTransformer":
 
                     d_model = st.number_input("Model Dimension", min_value=32, max_value=2048, value=64, step=32)
 
@@ -559,7 +1017,26 @@ def run():
                         index=default_index,
                         help="For Transformer models, number of heads must divide the hidden dimension evenly."
                     )
+                    if st.session_state.datetime_column == True:
+                        st.session_state.uses_positional_encoding = st.checkbox(
+                            "Use Positional Encoding",
+                            value=True,
+                            help="Use positional encoding for Transformer models."
+                        )
+
+                        if st.session_state.uses_positional_encoding:
+                            st.session_state.positional_encoding_type = st.selectbox(
+                                "Positional Encoding Type",
+                                ["Sinusoidal", "Learned"],
+                                index=0,
+                                help="Select the type of positional encoding to use."
+                            )
+                    else:
+                        st.session_state.uses_positional_encoding = False
+                        st.session_state.positional_encoding_type = "sinusoidal"
+
                 else:
+                    st.session_state.uses_positional_encoding = False
                     num_heads = 8  # Default value for other models (won't be used)
                 
                 # Input and output sequence length
@@ -653,12 +1130,14 @@ def run():
                 "epochs": epochs
             }
             
-            if dl_model_type == "Transformer":
+            if dl_model_type == "Transformer" or dl_model_type == "EncoderTransformer":
                 selected_model["d_model"] = d_model
                 selected_model["num_heads"] = num_heads
             
         if builtin_model_type == "Linear":
             st.subheader("Linear Model Configuration")
+
+            st.session_state.uses_positional_encoding = False
             
             linear_model_type = st.selectbox(
                 "Select Linear Model Type",
@@ -783,7 +1262,24 @@ def run():
                             index=default_index,
                             help="For Transformer models, number of heads must divide the hidden dimension evenly."
                         )
+                        if st.session_state.datetime_column == True:
+                            st.session_state.uses_positional_encoding = st.checkbox(
+                                "Use Positional Encoding",
+                                value=True,
+                                help="Use positional encoding for Transformer models."
+                            )
+                            if st.session_state.uses_positional_encoding:
+                                st.session_state.positional_encoding_type = st.selectbox(
+                                    "Positional Encoding Type",
+                                    ["Sinusoidal", "Learned"],
+                                    index=0,
+                                    help="Select the type of positional encoding to use."
+                                )
+                        else:
+                            st.session_state.uses_positional_encoding = False
+                            st.session_state.positional_encoding_type = "sinusoidal"
                     else:
+                        st.session_state.uses_positional_encoding = False
                         num_heads = 8  # Default value for other models (won't be used)
 
                     # Input and output sequence length
@@ -882,6 +1378,7 @@ def run():
             else:
                 # Linear model configuration
                 col1, col2 = st.columns(2)
+                st.session_state.uses_positional_encoding = False
                 
                 with col1:
                     # Input and output sequence length
@@ -1016,36 +1513,100 @@ def run():
             output_length = model_params["output_length"]
             
             # Prepare data
-            X, y, norm_params = prepare_time_series_data(
+            X_data, X_pos, y_data, norm_params = prepare_time_series_data(
                 data, input_vars, target_vars, input_length, output_length
             )
+
+            # st.write(f"Data shape: {X_data.shape}, {X_pos.shape}, {y_data.shape}")
             
-            # Check if we have enough data
-            if len(X) < 10:
-                st.error(f"Not enough data for the selected sequence lengths. Try using shorter sequences.")
-                return
-            
-            # Convert to PyTorch tensors
-            X_tensor = torch.FloatTensor(X)
-            y_tensor = torch.FloatTensor(y.reshape(y.shape[0], -1))  # Flatten output for simplicity
-            
-            # Create dataset
-            dataset = TensorDataset(X_tensor, y_tensor)
-            
-            # Split data
+            # Split the raw data chronologically
+            total_points = len(X_data)
             train_ratio = model_params["train_ratio"]
             val_ratio = model_params["val_ratio"]
             test_ratio = model_params["test_ratio"]
-            
-            dataset_size = len(dataset)
-            train_size = int(train_ratio * dataset_size)
-            val_size = int(val_ratio * dataset_size)
-            test_size = dataset_size - train_size - val_size
-            
-            train_dataset, val_dataset, test_dataset = random_split(
-                dataset, [train_size, val_size, test_size]
-            )
-            
+
+            # Calculate indices for data splits
+            train_end = int(total_points * train_ratio)
+            val_end = train_end + int(total_points * val_ratio)
+
+            # Split the raw data
+            train_X_data = X_data[:train_end]
+            train_X_pos = X_pos[:train_end]
+            train_y_data = y_data[:train_end]
+
+            val_X_data = X_data[train_end:val_end]
+            val_X_pos = X_pos[train_end:val_end]
+            val_y_data = y_data[train_end:val_end]
+
+            test_X_data = X_data[val_end:]
+            test_X_pos = X_pos[val_end:]
+            test_y_data = y_data[val_end:]
+
+            # Create sequences with different strides
+            # Training data: stride=1
+            train_X, train_pos, train_y = [], [], []
+            for i in range(len(train_X_data) - input_length - output_length + 1):
+                train_X.append(train_X_data[i:i+input_length])
+                train_pos.append(train_X_pos[i:i+input_length])
+                train_y.append(train_y_data[i+input_length:i+input_length+output_length])
+
+            # Validation data: stride=output_length
+            val_X, val_pos, val_y = [], [], []
+            for i in range(0, len(val_X_data) - input_length - output_length + 1, output_length):
+                val_X.append(val_X_data[i:i+input_length])
+                val_pos.append(val_X_pos[i:i+input_length])
+                val_y.append(val_y_data[i+input_length:i+input_length+output_length])
+
+            # Test data: stride=output_length
+            test_X, test_pos, test_y = [], [], []
+            for i in range(0, len(test_X_data) - input_length - output_length + 1, output_length):
+                test_X.append(test_X_data[i:i+input_length])
+                test_pos.append(test_X_pos[i:i+input_length])
+                test_y.append(test_y_data[i+input_length:i+input_length+output_length])
+
+            # Print info about how many sequences we created
+            st.info(f"Created {len(train_X)} training sequences, {len(val_X)} validation sequences, and {len(test_X)} test sequences")
+
+            # Convert to numpy arrays
+            train_X = np.array(train_X)
+            train_pos = np.array(train_pos)
+            train_y = np.array(train_y)
+            val_X = np.array(val_X)
+            val_pos = np.array(val_pos)
+            val_y = np.array(val_y)
+            test_X = np.array(test_X)
+            test_pos = np.array(test_pos)
+            test_y = np.array(test_y)
+
+            # Convert to PyTorch tensors
+            train_X_tensor = torch.FloatTensor(train_X)
+            train_pos_tensor = torch.FloatTensor(train_pos)
+            train_y_tensor = torch.FloatTensor(train_y)
+
+            # st.write(f"Training data shape: {train_X_tensor.shape}, {train_pos_tensor.shape}, {train_y_tensor.shape}")
+
+            val_X_tensor = torch.FloatTensor(val_X)
+            val_pos_tensor = torch.FloatTensor(val_pos)
+            val_y_tensor = torch.FloatTensor(val_y)
+
+            # st.write(f"Validation data shape: {val_X_tensor.shape}, {val_pos_tensor.shape}, {val_y_tensor.shape}")
+
+            test_X_tensor = torch.FloatTensor(test_X)
+            test_pos_tensor = torch.FloatTensor(test_pos)
+            test_y_tensor = torch.FloatTensor(test_y)
+
+            # st.write(f"Test data shape: {test_X_tensor.shape}, {test_pos_tensor.shape}, {test_y_tensor.shape}")
+
+            # Create datasets
+            if st.session_state.uses_positional_encoding:
+                train_dataset = TensorDataset(train_X_tensor, train_pos_tensor, train_y_tensor)
+                val_dataset = TensorDataset(val_X_tensor, val_pos_tensor, val_y_tensor)
+                test_dataset = TensorDataset(test_X_tensor, test_pos_tensor, test_y_tensor)
+            else:
+                train_dataset = TensorDataset(train_X_tensor, train_y_tensor)
+                val_dataset = TensorDataset(val_X_tensor, val_y_tensor)
+                test_dataset = TensorDataset(test_X_tensor, test_y_tensor)
+
             # Create data loaders
             batch_size = model_params["batch_size"]
             train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -1090,7 +1651,7 @@ def run():
             if model_params["type"] in ["deep_learning", "custom_deep_learning"]:
                 input_dim = input_feature_count
                 hidden_dim = model_params["hidden_dim"]
-                output_dim = len(target_vars) * output_length
+                output_dim = len(target_vars)
                 num_layers = model_params["num_layers"]
                 
                 if model_params["type"] == "deep_learning":
@@ -1098,27 +1659,33 @@ def run():
                     # st.info(f"Creating {model_name} model with input dim {input_dim}, hidden dim {hidden_dim}, output dim {output_dim}")
                     
                     if model_name == "LSTM":
-                        model = LSTM(input_dim, hidden_dim, output_dim, num_layers)
+                        model = LSTM(input_dim, hidden_dim, output_dim, num_layers, input_length, output_length)
                     elif model_name == "GRU":
-                        model = GRU(input_dim, hidden_dim, output_dim, num_layers)
+                        model = GRU(input_dim, hidden_dim, output_dim, num_layers, input_length, output_length)
                     elif model_name == "RNN":
-                        model = SimpleRNN(input_dim, hidden_dim, output_dim, num_layers)
+                        model = SimpleRNN(input_dim, hidden_dim, output_dim, num_layers, input_length, output_length)
                     elif model_name == "Transformer":
-                        model = Transformer(input_dim, model_params["d_model"], hidden_dim, output_dim, 
-                                            num_layers, nhead=model_params["num_heads"])
+                        # st.write(st.session_state.positional_encoding_type)
+                        model = Transformer(input_dim, model_params["d_model"], model_params["num_heads"], num_layers, 
+                                            hidden_dim, output_dim, input_length, output_length,
+                                            encoding_type=st.session_state.positional_encoding_type)
+                    elif model_name == "EncoderTransformer":
+                        model = EncoderTransformer(input_dim, model_params["d_model"], model_params["num_heads"], num_layers,
+                                            hidden_dim, output_dim, input_length, output_length,
+                                            encoding_type=st.session_state.positional_encoding_type)
                 else:
                     # Custom deep learning model
                     model_class = model_params["model_class"]
                     model = model_class(input_dim, hidden_dim, output_dim, num_layers)
             else:
                 # Linear or custom linear model
-                input_dim = input_feature_count * input_length
-                output_dim = len(target_vars) * output_length
+                input_dim = input_feature_count
+                output_dim = len(target_vars)
                 
                 st.info(f"Creating linear model with input dim {input_dim} and output dim {output_dim}")
                 
                 if model_params["type"] == "linear":
-                    model = LinearModel(input_dim, output_dim)
+                    model = LinearModel(input_dim, output_dim, input_length, output_length)
                 else:
                     # Custom linear model
                     model_class = model_params["model_class"]
@@ -1164,9 +1731,10 @@ def run():
             epochs = model_params["epochs"]
             patience = model_params.get("patience", 15) if model_params.get("use_early_stopping", True) else float('inf')
             
-            best_model_state, training_history = train_model(model, train_loader, val_loader, criterion, optimizer, 
-                                                             scheduler, device, epochs, patience, loss_chart, progress_bar, 
-                                                             status_text, verbose=False)
+            best_model_state, training_history = train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, 
+                                                             device, epochs, patience, loss_chart, progress_bar, status_text, 
+                                                             uses_positional_encoding=st.session_state.uses_positional_encoding, 
+                                                             verbose=False)
             
             # Mark training as complete
             status_text.success("Training complete!")
@@ -1205,7 +1773,9 @@ def run():
             
             # Evaluate on test set
             test_loss, predictions, actuals, metrics_results = evaluate_model(
-                model, test_loader, criterion, device, selected_metrics
+                model, test_loader, criterion, device, st.session_state.target_vars,
+                uses_positional_encoding=st.session_state.uses_positional_encoding, 
+                custom_metrics=selected_metrics
             )
             
             # Reshape predictions and actuals to original dimensions
@@ -1293,17 +1863,29 @@ def run():
             st.subheader("Evaluation Metrics")
             
             metrics_results = st.session_state.metrics_results
-            metrics_df = pd.DataFrame({
-                'Metric': list(metrics_results.keys()),
-                'Value': list(metrics_results.values())
-            })
+            for target_var in target_vars:
+                with st.expander(f"Metrics for {target_var}"):
+                    target_df = pd.DataFrame({
+                        'Metric': list(metrics_results[target_var].keys()),
+                        'Value': list(metrics_results[target_var].values())
+                    })
+                    st.table(target_df)
             
-            st.table(metrics_df)
-        
+            col1, col2 = st.columns(2)
+            with col1:
+                # Save configuration
+                if st.button("Save Model Configuration"):
+                    model_config = st.session_state.model_config
+                    config_file = f"configs/config_model_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+                    with open(config_file, "w") as f:
+                        json.dump(model_config, f, indent=4)
+                    st.success(f"Model configuration saved as {config_file}")
+
+            with col2:
             # Show option to proceed to evaluation
-            if st.button("Proceed to Model Evaluation"):
-                st.session_state.page = "model_evaluation"
-                st.rerun()
+                if st.button("Proceed to Model Evaluation"):
+                    st.session_state.page = "model_evaluation"
+                    st.rerun()
 
 # If run directly outside the main application
 if __name__ == "__main__":

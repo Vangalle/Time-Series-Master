@@ -113,7 +113,7 @@ def load_model_from_file(model_file):
         st.error(f"Error loading model: {str(e)}")
         return None
 
-def export_predictions(predictions, ground_truth, target_vars, output_length):
+def export_predictions(predictions, ground_truth, target_vars):
     """
     Export predictions and ground truth to a CSV or Excel file.
     
@@ -121,7 +121,6 @@ def export_predictions(predictions, ground_truth, target_vars, output_length):
         predictions: Denormalized predictions
         ground_truth: Denormalized ground truth
         target_vars: List of target variable names
-        output_length: Length of output sequence
         
     Returns:
         pandas.DataFrame: DataFrame with predictions and ground truth
@@ -131,24 +130,16 @@ def export_predictions(predictions, ground_truth, target_vars, output_length):
     
     # For each target variable and time step
     for var_idx, var_name in enumerate(target_vars):
-        for t in range(output_length):
-            # Get predictions and ground truth
-            if predictions.ndim == 3:  # Multi-step prediction
-                pred_vals = predictions[:, t, var_idx]
-                true_vals = ground_truth[:, t, var_idx]
-            else:  # Single-step prediction
-                pred_vals = predictions[:, var_idx]
-                true_vals = ground_truth[:, var_idx]
-            
-            # Add to export data
-            if output_length > 1:
-                # Use timestep in column name if we have multiple timesteps
-                export_data[f"{var_name}_true_t{t+1}"] = true_vals
-                export_data[f"{var_name}_pred_t{t+1}"] = pred_vals
-            else:
-                # Simpler naming if only one timestep
-                export_data[f"{var_name}_true"] = true_vals
-                export_data[f"{var_name}_pred"] = pred_vals
+        if predictions.ndim == 2:
+            pred_vals = predictions[:, var_idx]
+            true_vals = ground_truth[:, var_idx]
+        else:
+            pred_vals = predictions
+            true_vals = ground_truth
+        
+        # Use timestep in column name if we have multiple timesteps
+        export_data[f"{var_name}_true"] = true_vals
+        export_data[f"{var_name}_pred"] = pred_vals
     
     # Create DataFrame
     export_df = pd.DataFrame(export_data)
@@ -305,18 +296,21 @@ def run():
         else:
             st.error("No predictions available for evaluation.")
             return
-        
+        st.write(f"Shape of Predictions: {predictions.shape}")
+        st.write(f"Shape of Ground Truth: {ground_truth.shape}")
         # Determine the shape of predictions
         output_length = predictions.shape[1] if predictions.ndim == 3 else 1
         target_vars = model_data['target_vars']
+        st.write(f"target_vars: {target_vars}")
         
         # Normalization parameters
         norm_params = model_data['norm_params']
         y_mean = norm_params['y_mean']
         y_std = norm_params['y_std']
+        st.write(f"y_mean: {y_mean}")
+        st.write(f"y_std: {y_std}")
         
         # Select which target variable to visualize
-        target_var_idx = 0
         if len(target_vars) > 1:
             target_var_idx = st.selectbox(
                 "Select Target Variable to Visualize",
@@ -324,25 +318,25 @@ def run():
                 format_func=lambda x: target_vars[x]
             )
         
-        # Select which time step to visualize
-        time_step = 0
-        if output_length > 1:
-            time_step = st.slider(
-                "Select Time Step to Visualize",
-                0, output_length - 1, 0
-            )
-        
-        # Get the predictions and ground truth for the selected variable and time step
+        # Prepare data for metrics calculation across ALL time steps
         if predictions.ndim == 3:  # Multi-step prediction
-            pred_values = predictions[:, time_step, target_var_idx]
-            true_values = ground_truth[:, time_step, target_var_idx]
+            # Flatten predictions and ground truth for the selected variable
+            # This combines all time steps for comprehensive evaluation
+            all_pred_values = predictions[:, :, target_var_idx].flatten()
+            all_true_values = ground_truth[:, :, target_var_idx].flatten()
+            
+            # Denormalize
+            all_pred_values = denormalize_data(all_pred_values, y_mean[target_var_idx], y_std[target_var_idx])
+            all_true_values = denormalize_data(all_true_values, y_mean[target_var_idx], y_std[target_var_idx])
+            
         else:  # Single-step prediction
-            pred_values = predictions[:, target_var_idx]
-            true_values = ground_truth[:, target_var_idx]
-        
-        # Denormalize
-        pred_values = denormalize_data(pred_values, y_mean[target_var_idx], y_std[target_var_idx])
-        true_values = denormalize_data(true_values, y_mean[target_var_idx], y_std[target_var_idx])
+            # For single-step, there's no difference
+            all_pred_values = predictions[:, target_var_idx]
+            all_true_values = ground_truth[:, target_var_idx]
+            
+            # Denormalize
+            all_pred_values = denormalize_data(all_pred_values, y_mean[target_var_idx], y_std[target_var_idx])
+            all_true_values = denormalize_data(all_true_values, y_mean[target_var_idx], y_std[target_var_idx])
         
         # Select metrics to calculate
         st.subheader("Select Metrics")
@@ -386,14 +380,17 @@ def run():
         
         # Add custom metrics
         metrics_dict.update(selected_custom_metrics)
-        
+
+        st.write(f"Shape of all true values: {all_true_values.shape}")
+        st.write(f"Shape of all predicted values: {all_pred_values.shape}")
+
         # Calculate metrics
         if metrics_dict and st.button("Calculate Metrics"):
-            # Calculate metrics for the selected variable/timestep
-            metrics_results = calculate_metrics(true_values, pred_values, metrics_dict)
+            # Calculate metrics across ALL time steps
+            metrics_results = calculate_metrics(all_true_values, all_pred_values, metrics_dict)
             
             # Display metrics in a table
-            st.subheader("Evaluation Metrics")
+            st.subheader("Evaluation Metrics (Across All Time Steps)")
             
             metrics_df = pd.DataFrame({
                 'Metric': list(metrics_results.keys()),
@@ -404,6 +401,9 @@ def run():
             
             # Store metrics in session state
             st.session_state.current_metrics = metrics_results
+            
+            if output_length > 1:
+                st.info("Metrics are calculated across all time steps for comprehensive evaluation.")
         
         # Visualization section
         st.header("Visualization")
@@ -418,7 +418,7 @@ def run():
         if plot_type == "Time Series Plot":
             plot_window = st.slider(
                 "Window Size (0 for all data)",
-                0, len(pred_values), 0
+                0, len(all_pred_values), 0
             )
         
         elif plot_type == "Error Distribution":
@@ -435,16 +435,16 @@ def run():
             if plot_type == "Time Series Plot":
                 if plot_window > 0:
                     # Plot a window of the data
-                    plot_start = max(0, len(pred_values) - plot_window)
-                    plot_end = len(pred_values)
-                    
-                    ax.plot(range(plot_start, plot_end), true_values[plot_start:plot_end], label='Actual')
-                    ax.plot(range(plot_start, plot_end), pred_values[plot_start:plot_end], label='Predicted', alpha=0.7)
+                    plot_start = max(0, len(all_pred_values) - plot_window)
+                    plot_end = len(all_pred_values)
+
+                    ax.plot(range(plot_start, plot_end), all_true_values[plot_start:plot_end], label='Actual')
+                    ax.plot(range(plot_start, plot_end), all_pred_values[plot_start:plot_end], label='Predicted', alpha=0.7)
                     ax.set_xlabel('Sample')
                 else:
                     # Plot all data
-                    ax.plot(true_values, label='Actual')
-                    ax.plot(pred_values, label='Predicted', alpha=0.7)
+                    ax.plot(all_true_values, label='Actual')
+                    ax.plot(all_pred_values, label='Predicted', alpha=0.7)
                     ax.set_xlabel('Sample')
                 
                 ax.set_ylabel(target_vars[target_var_idx])
@@ -453,12 +453,13 @@ def run():
                 ax.grid(True, alpha=0.3)
             
             elif plot_type == "Scatter Plot":
-                ax.scatter(true_values, pred_values, alpha=0.7)
+                ax.scatter(all_true_values, all_pred_values, alpha=0.7)
                 
                 # Add perfect prediction line
-                min_val = min(np.min(true_values), np.min(pred_values))
-                max_val = max(np.max(true_values), np.max(pred_values))
+                min_val = min(np.min(all_true_values), np.min(all_pred_values))
+                max_val = max(np.max(all_true_values), np.max(all_pred_values))
                 ax.plot([min_val, max_val], [min_val, max_val], 'r--', alpha=0.5)
+                
                 
                 ax.set_xlabel('Actual Values')
                 ax.set_ylabel('Predicted Values')
@@ -466,9 +467,9 @@ def run():
                 ax.grid(True, alpha=0.3)
             
             elif plot_type == "Residual Plot":
-                residuals = pred_values - true_values
-                
-                ax.scatter(true_values, residuals, alpha=0.7)
+                residuals = all_pred_values - all_true_values
+
+                ax.scatter(all_true_values, residuals, alpha=0.7)
                 ax.axhline(y=0, color='r', linestyle='--', alpha=0.5)
                 
                 ax.set_xlabel('Actual Values')
@@ -477,10 +478,11 @@ def run():
                 ax.grid(True, alpha=0.3)
             
             elif plot_type == "Error Distribution":
-                residuals = pred_values - true_values
-                
+                residuals = all_pred_values - all_true_values
+
                 ax.hist(residuals, bins=num_bins, alpha=0.7)
                 ax.axvline(x=0, color='r', linestyle='--', alpha=0.5)
+            
                 
                 ax.set_xlabel('Prediction Error (Predicted - Actual)')
                 ax.set_ylabel('Frequency')
@@ -510,26 +512,27 @@ def run():
         st.header("Export Predictions")
         
         # Denormalize all predictions and ground truth
-        denorm_predictions = np.zeros_like(predictions)
-        denorm_ground_truth = np.zeros_like(ground_truth)
         
-        for var_idx in range(len(target_vars)):
-            if predictions.ndim == 3:  # Multi-step prediction
-                for t in range(predictions.shape[1]):
-                    denorm_predictions[:, t, var_idx] = denormalize_data(
-                        predictions[:, t, var_idx], y_mean[var_idx], y_std[var_idx]
-                    )
-                    denorm_ground_truth[:, t, var_idx] = denormalize_data(
-                        ground_truth[:, t, var_idx], y_mean[var_idx], y_std[var_idx]
-                    )
-            else:  # Single-step prediction
-                denorm_predictions[:, var_idx] = denormalize_data(
-                    predictions[:, var_idx], y_mean[var_idx], y_std[var_idx]
-                )
-                denorm_ground_truth[:, var_idx] = denormalize_data(
-                    ground_truth[:, var_idx], y_mean[var_idx], y_std[var_idx]
-                )
-        
+        # Prepare data for metrics calculation across ALL time steps
+        if predictions.ndim == 3:  # Multi-step prediction
+            # Flatten predictions and ground truth for the selected variable
+            # This combines all time steps for comprehensive evaluation
+            all_pred_values = predictions.reshape(-1, predictions.shape[2])
+            all_true_values = ground_truth.reshape(-1, ground_truth.shape[2])
+            
+            # Denormalize
+            all_pred_values = denormalize_data(all_pred_values, y_mean, y_std)
+            all_true_values = denormalize_data(all_true_values, y_mean, y_std)
+            
+        else:  # Single-step prediction
+            # For single-step, there's no difference
+            all_pred_values = predictions[:, target_var_idx]
+            all_true_values = ground_truth[:, target_var_idx]
+
+            # Denormalize
+            all_pred_values = denormalize_data(all_pred_values, y_mean, y_std)
+            all_true_values = denormalize_data(all_true_values, y_mean, y_std)
+
         # Export options
         col1, col2 = st.columns(2)
         
@@ -540,46 +543,60 @@ def run():
                 index=0
             )
         
+            export_separate = st.checkbox("Export All Predictions Separately", value=False)
+
         with col2:
-            default_filename = f"predictions_{model_data['model_name']}_{datetime.now().strftime('%Y%m%d')}"
-            export_filename = st.text_input("Filename (without extension)", default_filename)
+            if export_separate:
+                default_folder = f"predictions_{model_data['model_name']}_{datetime.now().strftime('%Y%m%d')}"
+                export_filename = st.text_input("Foldername", default_folder)
+            else:
+                default_filename = f"predictions_{model_data['model_name']}_{datetime.now().strftime('%Y%m%d')}"
+                export_filename = st.text_input("Filename (without extension)", default_filename)
         
         if st.button("Export Predictions"):
             # Create directory for exports
             os.makedirs("exports", exist_ok=True)
-            
-            # Create export dataframe
-            export_df = export_predictions(
-                denorm_predictions, 
-                denorm_ground_truth, 
-                target_vars, 
-                output_length
-            )
-            
-            # Export path
-            if file_format == "CSV":
-                export_path = f"exports/{export_filename}.csv"
-                export_df.to_csv(export_path, index=False)
+            if export_separate:
+                # Export each target variable separately
+                for var_idx, var_name in enumerate(target_vars):
+                    export_df = export_predictions(
+                        all_pred_values[:, var_idx],
+                        all_true_values[:, var_idx],
+                        [var_name]
+                    )
+
+                    # Export path
+                    if file_format == "CSV":
+                        export_path = f"exports/{export_filename}/{var_name}.csv"
+                        os.makedirs(os.path.dirname(export_path), exist_ok=True)
+                        export_df.to_csv(export_path, index=False)
+                    else:
+                        export_path = f"exports/{export_filename}/{var_name}.xlsx"
+                        os.makedirs(os.path.dirname(export_path), exist_ok=True)
+                        export_df.to_excel(export_path, index=False)
+                    
+                    st.success(f"Predictions for {var_name} exported to {export_path}")
             else:
-                export_path = f"exports/{export_filename}.xlsx"
-                export_df.to_excel(export_path, index=False)
+                # Create export dataframe
+                export_df = export_predictions(
+                    all_pred_values,
+                    all_true_values,
+                    target_vars
+                )
+
+                # Export path
+                if file_format == "CSV":
+                    export_path = f"exports/{export_filename}.csv"
+                    export_df.to_csv(export_path, index=False)
+                else:
+                    export_path = f"exports/{export_filename}.xlsx"
+                    export_df.to_excel(export_path, index=False)
             
-            st.success(f"Predictions exported to {export_path}")
+                st.success(f"Predictions exported to {export_path}")
             
-            # Provide a download link
-            with open(export_path, "rb") as f:
-                file_data = f.read()
-            
-            st.download_button(
-                label="Download File",
-                data=file_data,
-                file_name=os.path.basename(export_path),
-                mime="application/octet-stream"
-            )
-            
-            # Show preview of the exported data
-            st.subheader("Preview of Exported Data")
-            st.dataframe(export_df.head(10))
+                # Show preview of the exported data
+                st.subheader("Preview of Exported Data")
+                st.dataframe(export_df.head(10))
 
 # If run directly outside the main application
 if __name__ == "__main__":

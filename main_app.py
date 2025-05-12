@@ -52,6 +52,12 @@ if 'ground_truth' not in st.session_state:
     st.session_state.ground_truth = None
 if 'training_history' not in st.session_state:
     st.session_state.training_history = None
+if 'datetime_column' not in st.session_state:
+    st.session_state.datetime_column = None
+if 'uses_positional_encoding' not in st.session_state:
+    st.session_state.uses_positional_encoding = False
+if 'positional_encoding_type' not in st.session_state:
+    st.session_state.positional_encoding_type = "Sinusoidal"
 
 # Functions to navigate between pages
 def nav_to(page):
