@@ -36,3 +36,31 @@ def metric_wape(y_true, y_pred):
         float: WAPE value
     """
     return np.sum(np.abs(y_true - y_pred)) / np.sum(np.abs(y_true))
+
+def metric_mape_dir(y_true, y_pred):
+    """MAPE applied to direction data (MAPE_DIR)
+
+    Lower is better.
+
+    Args:
+        y_true: Ground truth values
+        y_pred: Predicted values
+        
+    Returns:
+        float: MAPE_DIR value    
+    """
+
+    y_true, y_pred = np.array(y_true), np.array(y_pred)
+    y_true_mean = np.mean(np.abs(y_true))
+    diff = y_pred - y_true
+    locs = np.where(diff > 180)[0]
+    y_true[locs] = 360 - y_true[locs]
+
+    diff = np.where(diff > 180, diff - 360, diff)
+    diff = np.where(diff < -180, diff + 360, diff)
+
+    error = np.abs(diff)
+
+    mape = np.mean(error / y_true_mean)
+
+    return mape

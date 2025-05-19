@@ -226,6 +226,30 @@ def metric_rmse(y_true, y_pred):
     return np.sqrt(np.mean((y_true - y_pred) ** 2))
 ```
 
+### Custom Correlation Function
+
+- Add the function to the custom_corr/example_corr.py
+
+Example corr function:
+```python
+def robust_correlation(x, y):
+    # Simple robust correlation using median
+    mask = ~(np.isnan(x) | np.isnan(y))
+    if mask.sum() < 2:
+        return np.nan
+    
+    x_clean, y_clean = x[mask], y[mask]
+    x_median = np.median(x_clean)
+    y_median = np.median(y_clean)
+    
+    # Median-based covariance
+    numerator = np.median((x_clean - x_median) * (y_clean - y_median))
+    denominator = np.sqrt(np.median((x_clean - x_median)**2) * 
+                         np.median((y_clean - y_median)**2))
+    
+    return numerator / denominator if denominator != 0 else np.nan
+```
+
 ## Directory Structure
 
 ```
@@ -242,8 +266,10 @@ Time_Series_Master/
 │   └── example_models.py       # Example custom models (auto-generated)
 ├── custom_metrics/             # Directory for custom metric definitions
 │   └── example_metrics.py      # Example custom metrics (auto-generated)
-├── custom_losses/             # Directory for custom metric definitions
-│   └── example_losses.py      # Example custom metrics (auto-generated)
+├── custom_losses/              # Directory for custom metric definitions
+│   └── example_losses.py       # Example custom metrics (auto-generated)
+├── custom_corr/                # Directory for custom correlation function definitions
+│   └── example_corr.py         # Example custom metrics (predefined)
 ├── configs/                    # Saved configurations
 ├── models/                     # Saved trained models
 ├── exports/                    # Exported predictions

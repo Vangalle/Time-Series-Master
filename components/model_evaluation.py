@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import os
 import json
 import torch
-import pickle
+import re
 from datetime import datetime
 from pathlib import Path
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, mean_absolute_percentage_error
@@ -92,22 +92,41 @@ def load_available_models():
     if not models_dir.exists():
         return []
     
-    model_files = list(models_dir.glob("*.pkl"))
+    model_files = list(models_dir.glob("*.pt"))
     return sorted(model_files, key=lambda x: x.stat().st_mtime, reverse=True)
 
 def load_model_from_file(model_file):
-    """
-    Load a trained model from a file.
-    
-    Args:
-        model_file: Path to the model file
-        
-    Returns:
-        dict: Model data dictionary
-    """
     try:
-        with open(model_file, 'rb') as f:
-            model_data = pickle.load(f)
+        # Load the model data
+        if model_file.name.endswith('_state.pt'):
+            # Handle the alternative saving format
+            model_state = torch.load(model_file)
+            metadata_path = str(model_file).replace('_state.pt', '_metadata.json')
+            with open(metadata_path, 'r') as f:
+                model_data = json.load(f)
+            model_data['model_state'] = model_state
+        else:
+            # Standard format
+            model_data = torch.load(model_file)
+            
+        # Extract timestamp from filename
+        timestamp_pattern = r'_(\d{8}_\d{6})'
+        match = re.search(timestamp_pattern, str(model_file))
+        if match:
+            timestamp = match.group(1)
+            
+            # Try to load predictions and ground truth
+            pred_path = model_file.parent / f"predictions_{timestamp}.npy"
+            truth_path = model_file.parent / f"ground_truth_{timestamp}.npy"
+            
+            if pred_path.exists() and truth_path.exists():
+                # Load from .npy files
+                model_data['predictions'] = np.load(pred_path)
+                model_data['ground_truth'] = np.load(truth_path)
+                st.success("Successfully loaded predictions and ground truth data")
+            else:
+                st.warning("Prediction data files not found. Some evaluation features may be limited.")
+                
         return model_data
     except Exception as e:
         st.error(f"Error loading model: {str(e)}")
@@ -504,7 +523,7 @@ def run():
                 os.makedirs("plots", exist_ok=True)
                 
                 # Save the plot
-                plot_file = f"plots/{plot_type.replace(' ', '_').lower()}_{target_vars[target_var_idx]}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                plot_file = f"plots/{plot_type.replace(' ', '_').lower()}_{target_vars[target_var_idx]}_{model_data['model_name']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
                 st.session_state.fig.savefig(plot_file, dpi=300, bbox_inches="tight")
                 st.success(f"Plot saved as {plot_file}")
             else:

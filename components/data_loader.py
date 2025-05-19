@@ -8,6 +8,14 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+# Import the custom correlation loader
+try:
+    from custom_corr_loader import get_custom_corr_loader, get_correlation_method
+    CUSTOM_CORR_AVAILABLE = True
+except ImportError:
+    CUSTOM_CORR_AVAILABLE = False
+    st.warning("Custom correlation loader not found. Only built-in correlation methods will be available.")
+
 def prepare_dataframe_for_streamlit(df):
     """Prepare DataFrame for Streamlit to prevent Arrow conversion errors"""
     # Create a deep copy to avoid modifying the original
@@ -36,11 +44,47 @@ def prepare_dataframe_for_streamlit(df):
     
     return df_copy
 
+def calculate_correlation_matrix(data, method_name, corr_loader=None):
+    """
+    Calculate correlation matrix using built-in or custom correlation methods
+    
+    Args:
+        data: DataFrame with numeric data
+        method_name: Name of the correlation method
+        corr_loader: CustomCorrLoader instance (optional)
+    
+    Returns:
+        Correlation matrix DataFrame
+    """
+    try:
+        if method_name in ["Pearson", "Spearman", "Kendall"]:
+            # Use built-in pandas correlation methods
+            return data.corr(method=method_name.lower())
+        elif CUSTOM_CORR_AVAILABLE and corr_loader:
+            # Use custom correlation function
+            custom_func = corr_loader.get_correlation_function(method_name)
+            if custom_func:
+                return data.corr(method=custom_func)
+            else:
+                st.error(f"Custom correlation function '{method_name}' not found")
+                return None
+        else:
+            st.error(f"Correlation method '{method_name}' not supported")
+            return None
+    except Exception as e:
+        st.error(f"Error calculating correlation matrix: {e}")
+        return None
+
 def run():
     """
     Main function to run the data loader component.
     This function will be called from the main application.
     """
+    # Initialize custom correlation loader
+    corr_loader = None
+    if CUSTOM_CORR_AVAILABLE:
+        corr_loader = get_custom_corr_loader()
+    
     # Title and introduction
     st.title("Time Series Data Selection")
     st.write("Upload your time series data and select input variables and targets.")
@@ -48,6 +92,12 @@ def run():
     # Create a sidebar for options
     with st.sidebar:
         st.header("Data Options")
+        
+        # Add refresh button for custom correlation functions
+        if CUSTOM_CORR_AVAILABLE:
+            if st.button("🔄 Refresh Custom Correlations", help="Reload custom correlation functions"):
+                corr_loader.refresh()
+                st.success("Custom correlation functions refreshed!")
         
         # File uploader
         uploaded_file = st.file_uploader("Choose a CSV or Excel file", type=["csv", "xlsx", "xls"])
@@ -120,16 +170,37 @@ def run():
             st.subheader("Data Statistics")
             st.write(data.describe())
             if not numeric_data.empty:
-                if not numeric_data.empty:
-                    correlation_method = st.selectbox("Select Correlation Method", ["Pearson", "Spearman", "Kendall"], index=0)
-                    correlation_matrix = numeric_data.corr(method=correlation_method.lower())
-                    # st.write("Correlation Matrix:")
-                    # st.dataframe(correlation_matrix)
+                # Get available correlation methods
+                if CUSTOM_CORR_AVAILABLE and corr_loader:
+                    correlation_options = corr_loader.get_all_correlation_options()
+                else:
+                    correlation_options = ["Pearson", "Spearman", "Kendall"]
+                
+                # Display info about custom correlations
+                if CUSTOM_CORR_AVAILABLE and corr_loader:
+                    custom_funcs = corr_loader.get_custom_correlation_functions()
+                    if custom_funcs:
+                        with st.expander(f"📊 Custom Correlation Functions ({len(custom_funcs)} available)"):
+                            for name in custom_funcs.keys():
+                                st.write(f"• {name}")
+                            st.info("Add more custom correlation functions by placing them in the `custom_corr/` directory!")
+                
+                # Correlation method selection
+                correlation_method = st.selectbox(
+                    "Select Correlation Method", 
+                    correlation_options, 
+                    index=0,
+                    help="Select built-in correlation methods or custom functions from the custom_corr directory"
+                )
+                
+                # Calculate correlation matrix
+                correlation_matrix = calculate_correlation_matrix(numeric_data, correlation_method, corr_loader)
+                
+                if correlation_matrix is not None:
                     # Calculate appropriate figure size and font size based on number of columns
                     num_cols = len(correlation_matrix.columns)
                     
                     # Dynamically adjust figure size based on column count
-                    # Base size of 8x8, increasing by 0.5 per column, capped at 20x20
                     fig_size = num_cols
                     
                     # Dynamically adjust font size based on column count
@@ -162,12 +233,12 @@ def run():
                     fig.savefig(buffer, format='png', dpi=300, bbox_inches='tight')
                     buffer.seek(0)
 
-                    co1, col2 = st.columns(2)
-                    with co1:
+                    col1, col2 = st.columns(2)
+                    with col1:
                         st.download_button(
                             label="Download Correlation Matrix",
                             data=correlation_matrix.to_csv().encode('utf-8'),
-                            file_name='correlation_matrix.csv',
+                            file_name=f'{correlation_method.lower()}_correlation_matrix.csv',
                             mime='text/csv'
                         )
                     with col2:
@@ -175,10 +246,9 @@ def run():
                         st.download_button(
                             label="Download Correlation Heatmap",
                             data=buffer,
-                            file_name='correlation_heatmap.png',
+                            file_name=f'{correlation_method.lower()}_correlation_heatmap.png',
                             mime='image/png'
                         )
-                    
         
         # Column information
         st.subheader("Column Information")
@@ -268,8 +338,6 @@ def run():
             # Remove already selected inputs
             available_targets = [col for col in target_options if col not in datetime_cols]
             
-            # Filter default target values to only include those in available options
-            
             selected_targets = st.multiselect(
                 "Select target variables",
                 available_targets
@@ -320,10 +388,20 @@ def run():
                 plot_height = st.slider("Plot Height", 4, 15, 6)
             
             if plot_type == "Heatmap (Correlation)":
-                heatmap_type = st.selectbox("Select Heatmap Type", ["Pearson", "Spearman", "Kendall"], index=0)
+                # Get correlation options for plotting
+                if CUSTOM_CORR_AVAILABLE and corr_loader:
+                    plot_correlation_options = corr_loader.get_all_correlation_options()
+                else:
+                    plot_correlation_options = ["Pearson", "Spearman", "Kendall"]
+                
+                heatmap_type = st.selectbox(
+                    "Select Heatmap Type", 
+                    plot_correlation_options, 
+                    index=0,
+                    help="Choose correlation method for the heatmap"
+                )
 
             generate_plot = st.button("Generate Plot")
-            
             
             if generate_plot:
                 # Variables to plot
@@ -375,31 +453,40 @@ def run():
                             # Filter to numeric variables only for correlation
                             numeric_vars = [var for var in vars_to_plot if np.issubdtype(data[var].dtype, np.number)]
                             if len(numeric_vars) > 1:
-                                correlation = data[numeric_vars].corr(method=heatmap_type.lower())
-                                fig_size = num_cols
-                    
-                                # Dynamically adjust font size based on column count
-                                font_size = fig_size + 2
+                                # Calculate correlation using selected method
+                                correlation = calculate_correlation_matrix(
+                                    data[numeric_vars], 
+                                    heatmap_type, 
+                                    corr_loader
+                                )
                                 
-                                # Annotation size slightly smaller than font size
-                                annot_size = max(6, font_size - 2)
+                                if correlation is not None:
+                                    fig_size = max(6, len(numeric_vars))
+                        
+                                    # Dynamically adjust font size based on column count
+                                    font_size = fig_size + 2
+                                    
+                                    # Annotation size slightly smaller than font size
+                                    annot_size = max(6, font_size - 2)
 
-                                # Create correlation heatmap with seaborn
-                                fig, ax = plt.subplots(figsize=(fig_size, fig_size))
-                                heatmap = sns.heatmap(correlation, xticklabels=numeric_vars, 
-                                                    yticklabels=numeric_vars, annot=True, fmt=".2f", 
-                                                    cmap='PRGn', vmin=-1, vmax=1, annot_kws={"size": annot_size})
+                                    # Create correlation heatmap with seaborn
+                                    fig, ax = plt.subplots(figsize=(fig_size, fig_size))
+                                    heatmap = sns.heatmap(correlation, xticklabels=numeric_vars, 
+                                                        yticklabels=numeric_vars, annot=True, fmt=".2f", 
+                                                        cmap='PRGn', vmin=-1, vmax=1, annot_kws={"size": annot_size})
 
-                                # Apply font size to tick labels
-                                plt.xticks(rotation=45, ha='right', fontsize=font_size)
-                                plt.yticks(rotation=0, fontsize=font_size)
-                                
-                                # Adjust colorbar font size
-                                cbar = heatmap.collections[0].colorbar
-                                cbar.ax.tick_params(labelsize=font_size)
+                                    # Apply font size to tick labels
+                                    plt.xticks(rotation=45, ha='right', fontsize=font_size)
+                                    plt.yticks(rotation=0, fontsize=font_size)
+                                    
+                                    # Adjust colorbar font size
+                                    cbar = heatmap.collections[0].colorbar
+                                    cbar.ax.tick_params(labelsize=font_size)
 
-                                plt.title(f"{heatmap_type} Correlation Heatmap", fontsize=font_size + 3, loc='center')
-                                plt.tight_layout()
+                                    plt.title(f"{heatmap_type} Correlation Heatmap", fontsize=font_size + 3, loc='center')
+                                    plt.tight_layout()
+                                else:
+                                    st.error("Could not calculate correlation matrix")
                             else:
                                 st.warning("Correlation heatmap requires at least 2 numeric variables")
                         
@@ -479,6 +566,32 @@ def run():
     else:
         # Show instructions when no data is loaded
         st.info("Please upload a CSV or Excel file using the sidebar to get started.")
+        
+        # Add information about custom correlation functions
+        if CUSTOM_CORR_AVAILABLE:
+            with st.expander("📚 About Custom Correlation Functions"):
+                st.write("""
+                ### Adding Custom Correlation Functions
+                
+                You can add custom correlation functions by creating Python files in the `custom_corr/` directory.
+                
+                **Requirements for custom correlation functions:**
+                - Must take exactly two parameters (e.g., `x`, `y`)
+                - Must return a single numeric value between -1 and 1 (or NaN for invalid data)
+                - Should handle NaN values appropriately
+                
+                **Example:**
+                ```python
+                def my_custom_correlation(x, y):
+                    mask = ~(np.isnan(x) | np.isnan(y))
+                    if mask.sum() < 2:
+                        return np.nan
+                    # Your correlation calculation here
+                    return correlation_value
+                ```
+                
+                The functions will be automatically detected and made available in the correlation method dropdown.
+                """)
         
         # Example data section
         with st.expander("Don't have data? Use example data"):

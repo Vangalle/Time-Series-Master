@@ -175,7 +175,14 @@ if st.session_state.page == "home":
     - **Data Selection**: Upload time series data and select input/target variables
     - **Model Training**: Choose from various models including RNN, LSTM, GRU, Transformer, and linear models
     - **Custom Models**: Add your own model implementations
+        - Deep Learning Models Input Parameters:
+            - Non Transformer: [input_dim, hidden_dim, output_dim, num_layers, input_length, output_length]
+            - Transformer: [input_dim, d_model, num_heads, num_layers, hidden_dim, output_dim, input_length, 
+                           output_length, encoding_type=st.session_state.positional_encoding_type]
     - **Custom Metrics**: Define and use your own evaluation metrics
+        - Function Name should start with `metric_`
+    - **Custom Losses** Define and use your own loss function
+    - **Custom Correlation Function** Define and use your own correlation function to apply them to feature selction.
     - **Model Evaluation**: Evaluate model performance and export predictions
     
     ### Getting Started

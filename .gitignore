@@ -5,3 +5,9 @@ __pycache__/
 !/exports/.gitkeep
 /models/*
 !/models/.gitkeep
+/custom_models/*
+!/custom_models/example_models.py
+/custom_metrics/*
+!/custom_models/example_metrics.py
+/custom_losses/*
+!/custom_models/example_losses.py

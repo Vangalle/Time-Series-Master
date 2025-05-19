@@ -1,3 +1,4 @@
+import inspect
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -64,7 +65,7 @@ class LSTM(nn.Module):
         self.lstm1 = nn.LSTM(input_dim, hidden_dim * output_dim, batch_first=True, dropout=dropout)
         self.lstm2 = nn.LSTM(hidden_dim * output_dim, hidden_dim * output_dim, batch_first=True, dropout=dropout)
         if output_dim == 1:
-            self.dense = nn.Linear(hidden_dim * output_dim, output_length)
+            self.dense = nn.Linear(hidden_dim, output_length)
         else:
             self.dense = nn.Linear(hidden_dim * output_dim * input_length, output_dim * output_length)
         
@@ -130,6 +131,7 @@ class Transformer(nn.Module):
         self.use_projection = use_projection
         if use_projection:
             self.input_projection = nn.Linear(input_dim, d_model)
+            self.tgt_projection = nn.Linear(output_dim, d_model)
         else:
             # If not using projection, input_dim must equal d_model
             assert input_dim == d_model, f"When use_projection=False, input_dim ({input_dim}) must equal d_model ({d_model})"
@@ -243,7 +245,7 @@ class Transformer(nn.Module):
 
         if tgt is not None:
             if self.use_projection:
-                tgt = self.input_projection(tgt)
+                tgt = self.tgt_projection(tgt)
             else:
                 tgt = tgt
 
@@ -571,9 +573,9 @@ class MultivariatePosEncTransformer(nn.Module):
         
         return predictions
 
-class LinearModel(nn.Module):
-    def __init__(self, input_dim, output_dim, input_length, output_length,):
-        super(LinearModel, self).__init__()
+class DirectLinearProjectionNetwork(nn.Module):
+    def __init__(self, input_dim, output_dim, input_length, output_length):
+        super(DirectLinearProjectionNetwork, self).__init__()
         self.output_dim = output_dim
         self.output_length = output_length
 
@@ -593,6 +595,127 @@ class LinearModel(nn.Module):
             x = self.dense(x)
             x = x. reshape(batch_size, self.output_length, self.output_dim)
         return x
+
+class SMA(nn.Module):
+    """
+    Simple Moving Average (SMA) model. Do not train, just used in prediction. 
+    Implementing an autoregressive way that uses the mean of last window_size timesteps as the prediction.
+
+    """
+    def __init__(self, input_dim, output_dim, input_length, output_length, window_size=5):
+        super(SMA, self).__init__()
+        self.output_dim = output_dim
+        self.output_length = output_length
+        self.window_size = min(window_size, input_length)
+        
+        # Projection layer to map from input dimensions to output dimensions
+        self.proj = nn.Linear(input_dim, output_dim)
+    
+    def forward(self, x):
+        # x shape: [batch_size, input_length, input_dim]
+        # Calculate moving average using the last window_size timesteps
+        x_window = x[:, -self.window_size:, :]
+        x_ma = torch.mean(x_window, dim=1)  # [batch_size, input_dim]
+        
+        # Project to output dimension if needed
+        x_ma_proj = self.proj(x_ma)  # [batch_size, output_dim]
+        
+        # Repeat the latest MA value for output_length steps
+        output = x_ma_proj.unsqueeze(1).repeat(1, self.output_length, 1)
+        
+        return output  # [batch_size, output_length, output_dim]
+
+class SimpleExponentialSmoothing(nn.Module):
+    def __init__(self, input_dim, output_dim, input_length, output_length, alpha=0.3):
+        super(SimpleExponentialSmoothing, self).__init__()
+        self.output_dim = output_dim
+        self.output_length = output_length
+        
+        # Alpha as a learnable parameter, constrained between 0 and 1
+        self.alpha = nn.Parameter(torch.tensor(alpha))
+        
+        # Projection for output dimension
+        self.proj = nn.Linear(input_dim, output_dim)
+    
+    def forward(self, x):
+        # x shape: [batch_size, input_length, input_dim]
+        batch_size, seq_length, _ = x.size()
+        
+        # Apply exponential smoothing
+        alpha = torch.sigmoid(self.alpha)  # Constrain between 0 and 1
+        
+        # Initialize with first observation
+        smoothed = x[:, 0, :].clone()
+        
+        # Iteratively apply exponential smoothing
+        for t in range(1, seq_length):
+            smoothed = alpha * x[:, t, :] + (1 - alpha) * smoothed
+        
+        # Project to output dimension
+        smoothed_proj = self.proj(smoothed)  # [batch_size, output_dim]
+        
+        # Repeat for output_length steps
+        output = smoothed_proj.unsqueeze(1).repeat(1, self.output_length, 1)
+        
+        return output  # [batch_size, output_length, output_dim]
+
+class LinearRegressionModel(nn.Module):
+    def __init__(self, input_dim, output_dim, input_length, output_length):
+        super(LinearRegressionModel, self).__init__()
+        self.output_dim = output_dim
+        self.output_length = output_length
+        
+        # Linear regression for each feature dimension
+        self.regression = nn.Linear(2, 1)  # slope and intercept
+        
+        # Projection to output dimension
+        self.proj = nn.Linear(input_dim, output_dim)
+    
+    def forward(self, x):
+        # x shape: [batch_size, input_length, input_dim]
+        batch_size, input_length, input_dim = x.size()
+        
+        # Time indices for regression
+        time_idx = torch.arange(0, input_length, dtype=torch.float32, device=x.device)
+        time_idx = time_idx.unsqueeze(0).unsqueeze(2).repeat(batch_size, 1, input_dim)
+        
+        # Stack x and time for regression
+        x_time = torch.stack([time_idx, x], dim=3)  # [batch_size, input_length, input_dim, 2]
+        
+        # Reshape for linear regression
+        x_time_flat = x_time.reshape(-1, 2)
+        
+        # Apply regression
+        pred_flat = self.regression(x_time_flat).squeeze(-1)
+        
+        # Reshape back
+        pred = pred_flat.reshape(batch_size, input_length, input_dim)
+        
+        # Get the coefficients for future predictions
+        last_time_idx = input_length - 1
+        future_time_idx = torch.arange(last_time_idx + 1, last_time_idx + self.output_length + 1, 
+                                      dtype=torch.float32, device=x.device)
+        
+        # For each feature, use the fitted line to predict future values
+        predictions = []
+        for i in range(self.output_length):
+            future_time = future_time_idx[i]
+            # Create inputs for each step in the future
+            future_inputs = torch.cat([
+                future_time.repeat(batch_size, 1),
+                torch.ones(batch_size, 1, device=x.device)
+            ], dim=1)
+            pred_i = self.regression(future_inputs).reshape(batch_size, 1, input_dim)
+            predictions.append(pred_i)
+        
+        # Concatenate predictions
+        output = torch.cat(predictions, dim=1)
+        
+        # Project to output dimension if needed
+        if input_dim != self.output_dim:
+            output = self.proj(output)
+        
+        return output  # [batch_size, output_length, output_dim]
 
 # Function to prepare time series data
 def prepare_time_series_data(data, input_vars, target_vars, input_length, output_length):
@@ -883,27 +1006,78 @@ def denormalize_data(data, mean, std):
 # Function to save model and results
 def save_model_and_results(model_info, model_config, norm_params, 
                          predictions, actuals, input_vars, target_vars):
-    # Create directory for models
+    # Create directories for models
     os.makedirs("models", exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
-    # Save model
-    model_data = {
+    # Get the model and its state
+    model_state = model_info.get("model_state")
+    
+    # Recursively clean nested dictionaries to avoid class references
+    def clean_for_serialization(item):
+        if isinstance(item, dict):
+            return {k: clean_for_serialization(v) for k, v in item.items() if k != 'model_class'}
+        elif isinstance(item, list):
+            return [clean_for_serialization(i) for i in item]
+        elif isinstance(item, tuple):
+            return tuple(clean_for_serialization(i) for i in item)
+        elif inspect.isclass(item) or inspect.isfunction(item) or inspect.ismodule(item):
+            return str(item)
+        else:
+            return item
+    
+    # Create a clean version of the configuration
+    clean_config = clean_for_serialization(model_config)
+    
+    # Create a minimal data package with only what's needed for loading/inference
+    safe_model_data = {
         'model_name': model_config.get("model_name", "Unknown"),
-        'model_config': model_config,
-        'model_state': model_info.get("model_state"),
-        'model_class': model_info.get("model_class_name"),
+        'model_config': clean_config,
+        'model_state': model_state,  # This is just a state_dict, which is safe to pickle
+        'model_class_name_str': str(model_info.get("model_class_name")),
         'input_vars': input_vars,
         'target_vars': target_vars,
         'norm_params': norm_params,
         'timestamp': timestamp
     }
     
-    model_path = f"models/{model_data['model_name']}_{timestamp}.pkl"
-    with open(model_path, 'wb') as f:
-        pickle.dump(model_data, f)
+    # Save predictions and ground truth separately to avoid serialization issues
+    with open(f"models/predictions_{timestamp}.npy", 'wb') as f:
+        np.save(f, predictions)
     
-    # Return data for saving results separately
+    with open(f"models/ground_truth_{timestamp}.npy", 'wb') as f:
+        np.save(f, actuals)
+    
+    # Create model filename
+    model_path = f"models/{safe_model_data['model_name']}_{timestamp}.pt"
+    
+    try:
+        # Try saving with torch's serialization
+        torch.save(safe_model_data, model_path)
+    except Exception as e:
+        st.warning(f"Error during model saving with torch.save: {str(e)}")
+        st.info("Trying alternative saving methods...")
+        
+        try:
+            # Try using json for saving metadata
+            metadata_path = f"models/{safe_model_data['model_name']}_{timestamp}_metadata.json"
+            with open(metadata_path, 'w') as f:
+                # Convert any non-serializable objects to strings
+                json_safe = {k: str(v) if not isinstance(v, (dict, list, str, int, float, bool, type(None))) 
+                            else v for k, v in safe_model_data.items() if k != 'model_state'}
+                json.dump(json_safe, f, indent=2)
+            
+            # Save state_dict separately
+            state_dict_path = f"models/{safe_model_data['model_name']}_{timestamp}_state.pt"
+            torch.save(model_state, state_dict_path)
+            
+            st.success(f"Model saved using alternative method: metadata at {metadata_path} and state at {state_dict_path}")
+            model_path = state_dict_path  # Return the state dict path
+            
+        except Exception as e2:
+            st.error(f"All saving methods failed. Error: {str(e2)}")
+            return None, timestamp
+    
     return model_path, timestamp
 
 def add_scroll_to_top():
@@ -1194,7 +1368,7 @@ def run():
             
             linear_model_type = st.selectbox(
                 "Select Linear Model Type",
-                ["Simple Linear Regression"]
+                ["Direct Linear Projection Network"]
             )
             
             col1, col2 = st.columns(2)
@@ -1517,6 +1691,11 @@ def run():
                     "batch_size": batch_size,
                     "epochs": epochs
                 }
+
+                if model_info['architecture'].title() == "Transformer":
+                    selected_model["d_model"] = d_model
+                    selected_model["num_heads"] = num_heads
+
             else:
                 # Linear model configuration
                 col1, col2 = st.columns(2)
@@ -1861,7 +2040,15 @@ def run():
                 else:
                     # Custom deep learning model
                     model_class = model_params["model_class"]
-                    model = model_class(input_dim, hidden_dim, output_dim, num_layers)
+                    # st.write(f"Creating custom model {model_class} with input dim {input_dim}, hidden dim {hidden_dim}, output dim {output_dim}")
+                    # st.write("Architecture:", model_info['architecture'])
+                    if model_info['architecture'].title() == "Transformer":
+                        # Transformer model
+                        model = model_class(input_dim, model_params["d_model"], model_params["num_heads"], num_layers, 
+                                            hidden_dim, output_dim, input_length, output_length,
+                                            encoding_type=st.session_state.positional_encoding_type)
+                    else:
+                        model = model_class(input_dim, hidden_dim, output_dim, num_layers, input_length, output_length)
             else:
                 # Linear or custom linear model
                 input_dim = input_feature_count
@@ -1870,7 +2057,7 @@ def run():
                 st.info(f"Creating linear model with input dim {input_dim} and output dim {output_dim}")
                 
                 if model_params["type"] == "linear":
-                    model = LinearModel(input_dim, output_dim, input_length, output_length)
+                    model = DirectLinearProjectionNetwork(input_dim, output_dim, input_length, output_length)
                 else:
                     # Custom linear model
                     model_class = model_params["model_class"]
@@ -1898,7 +2085,7 @@ def run():
             if model_params.get("use_lr_scheduler", False):
                 if model_params["lr_scheduler_type"] == "ReduceLROnPlateau":
                     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-                        optimizer, mode='min', factor=0.5, patience=5, verbose=True
+                        optimizer, mode='min', factor=0.5, patience=5
                     )
                 elif model_params["lr_scheduler_type"] == "StepLR":
                     scheduler = optim.lr_scheduler.StepLR(
