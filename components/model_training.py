@@ -322,7 +322,7 @@ class Transformer(nn.Module):
 class EncoderTransformer(nn.Module):
     def __init__(self, input_dim, d_model, nhead, num_layers, hidden_dim, output_dim,
                  input_length, output_length, max_seq_length=5000, encoding_type='sinusoidal',
-                 use_projection=True):
+                 use_projection=True, dropout=0.5):
         
         self.input_length = input_length
         self.output_length = output_length
@@ -355,6 +355,7 @@ class EncoderTransformer(nn.Module):
             d_model=d_model, 
             nhead=nhead, 
             dim_feedforward=hidden_dim,
+            dropout= dropout,
             batch_first=True
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
@@ -1227,9 +1228,9 @@ def run():
                     num_heads = 8  # Default value for other models (won't be used)
                 
                 # Input and output sequence length
-                input_length = st.number_input("Input Sequence Length", min_value=1, max_value=500, value=12, step=3)
+                input_length = st.number_input("Input Sequence Length", min_value=1, max_value=1000, value=12, step=3)
 
-                output_length = st.number_input("Output Sequence Length", min_value=1, max_value=500, value=12, step=3)
+                output_length = st.number_input("Output Sequence Length", min_value=1, max_value=1000, value=12, step=3)
 
                 
             with col2:
@@ -1375,9 +1376,9 @@ def run():
             
             with col1:
                 # Input and output sequence length
-                input_length = st.number_input("Input Sequence Length", min_value=1, max_value=500,
+                input_length = st.number_input("Input Sequence Length", min_value=1, max_value=1000,
                                                 value=12, step=3, key="linear_input_length")
-                output_length = st.number_input("Output Sequence Length", min_value=1, max_value=500,
+                output_length = st.number_input("Output Sequence Length", min_value=1, max_value=1000,
                                                 value=12, step=3, key="linear_output_length")
                 
                 # Loss function selection
@@ -1556,10 +1557,10 @@ def run():
                         num_heads = 8  # Default value for other models (won't be used)
 
                     # Input and output sequence length
-                    input_length = st.number_input("Input Sequence Length", min_value=1, max_value=500, value=12, 
+                    input_length = st.number_input("Input Sequence Length", min_value=1, max_value=1000, value=12, 
                                                    step=3, key="custom_input_length")
 
-                    output_length = st.number_input("Output Sequence Length", min_value=1, max_value=500, value=12, 
+                    output_length = st.number_input("Output Sequence Length", min_value=1, max_value=1000, value=12, 
                                                     step=3, key="custom_output_length")
                     
                 with col2:
@@ -1703,9 +1704,9 @@ def run():
                 
                 with col1:
                     # Input and output sequence length
-                    input_length = st.number_input("Input Sequence Length", min_value=1, max_value=500, 
+                    input_length = st.number_input("Input Sequence Length", min_value=1, max_value=1000, 
                                                    value=12, step=3, key="custom_linear_input_length")
-                    output_length = st.number_input("Output Sequence Length", min_value=1, max_value=500, 
+                    output_length = st.number_input("Output Sequence Length", min_value=1, max_value=1000, 
                                                     value=12, step=3, key="custom_linear_output_length")
                     
                     # Loss function selection

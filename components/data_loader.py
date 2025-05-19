@@ -355,9 +355,28 @@ def run():
         plot_options = st.expander("Plot Options", expanded=False)
         
         with plot_options:
-            plot_inputs = st.checkbox("Plot Input Variables", value=True)
-            plot_targets = st.checkbox("Plot Target Variables", value=True)
+
+            col0, col1 = st.columns(2)
+
+            with col0:
+                plot_inputs = st.checkbox("Plot Input Variables", value=True)
+                plot_targets = st.checkbox("Plot Target Variables", value=True)
+            with col1:
+                turn_to_log = st.checkbox("Take the logarithm of the data", value=False)
+                if turn_to_log:
+                    log_base = st.selectbox("Log base", ["Natural log (ln)", "Log base 10", "Log base 2"], index=1)
+
+            # Variables to plot
+            vars_to_plot = []
+            if plot_inputs and selected_inputs:
+                vars_to_plot.extend(selected_inputs)
+            if plot_targets and selected_targets:
+                vars_to_plot.extend(selected_targets)
             
+            vars_to_plot = list(dict.fromkeys(vars_to_plot))
+
+            not_to_generate = False
+
             # Plot type selection
             plot_type = st.selectbox(
                 "Select Plot Type",
@@ -374,18 +393,68 @@ def run():
                     x_axis_col = st.selectbox("Select X-axis column", x_axis_options)
             
             elif plot_type == "Scatter Plot":
-                # For scatter plots, user needs to select x and y variables
-                scatter_x = st.selectbox("Select X-axis variable", data.columns.tolist())
+                # Add option for distribution view
+                use_constant_x = st.checkbox("Use constant X-axis (for distribution view)", 
+                                            help="Plot all variables at x=0 to see their distributions")
+                
+                if not use_constant_x:
+                    # For scatter plots, user needs to select x and y variables
+                    scatter_x = st.selectbox("Select X-axis variable", 
+                                        data.select_dtypes(include=['number']).columns.tolist())
+                    
+                    # Filter out X variable from Y variables and only keep numeric ones
+                    y_vars = [var for var in vars_to_plot 
+                            if var != scatter_x and np.issubdtype(data[var].dtype, np.number)]
+                    
+                    # Check for non-numeric variables that were filtered out
+                    non_numeric_y_vars = [var for var in vars_to_plot 
+                                        if var != scatter_x and not np.issubdtype(data[var].dtype, np.number)]
+                    
+                    if non_numeric_y_vars:
+                        st.warning(f"⚠️ Non-numeric Y variables will be skipped: {', '.join(non_numeric_y_vars)}")
+                    
+                    if not y_vars:
+                        not_to_generate = True
+                        if vars_to_plot:
+                            st.warning(f"⚠️ No valid numeric Y variables available after filtering.")
+                            st.info("Please select additional numeric variables or choose a different X-axis variable.")
+                        else:
+                            st.info("Please select some input/target variables to plot on the Y-axis.")
+                    else:
+                        not_to_generate = False
+                        if len(vars_to_plot) != len(y_vars):
+                            removed_count = len(vars_to_plot) - len(y_vars)
+                            st.info(f"ℹ️ Filtered out {removed_count} variable(s) (X-axis or non-numeric) from Y-axis.")
+                else:
+                    # For distribution view, use all numeric variables
+                    y_vars = [var for var in vars_to_plot if np.issubdtype(data[var].dtype, np.number)]
+                    non_numeric_vars = [var for var in vars_to_plot if not np.issubdtype(data[var].dtype, np.number)]
+                    
+                    if non_numeric_vars:
+                        st.warning(f"⚠️ Non-numeric variables will be skipped: {', '.join(non_numeric_vars)}")
+                    
+                    if not y_vars:
+                        not_to_generate = True
+                        st.warning("⚠️ No numeric variables available for distribution view.")
+                    else:
+                        not_to_generate = False
+                        st.info(f"ℹ️ Distribution view will show {len(y_vars)} variable(s) at constant X position.")
+                        
+                        # Add jitter option for better visualization
+                        add_jitter = st.checkbox("Add horizontal jitter", value=True, 
+                                            help="Adds small random horizontal offset to avoid overlapping points")
+
                 
             elif plot_type == "Histogram":
                 hist_bins = st.slider("Number of bins", 5, 100, 20)
                 
             # Plot size
-            col1, col2 = st.columns(2)
-            with col1:
-                plot_width = st.slider("Plot Width", 6, 20, 12)
-            with col2:
-                plot_height = st.slider("Plot Height", 4, 15, 6)
+            if not not_to_generate:
+                col1, col2 = st.columns(2)
+                with col1:
+                    plot_width = st.slider("Plot Width", 6, 20, 12)
+                with col2:
+                    plot_height = st.slider("Plot Height", 4, 15, 6)
             
             if plot_type == "Heatmap (Correlation)":
                 # Get correlation options for plotting
@@ -400,16 +469,13 @@ def run():
                     index=0,
                     help="Choose correlation method for the heatmap"
                 )
-
-            generate_plot = st.button("Generate Plot")
+            
+            if not not_to_generate:
+                generate_plot = st.button("Generate Plot")
+            else:
+                generate_plot = False
             
             if generate_plot:
-                # Variables to plot
-                vars_to_plot = []
-                if plot_inputs and selected_inputs:
-                    vars_to_plot.extend(selected_inputs)
-                if plot_targets and selected_targets:
-                    vars_to_plot.extend(selected_targets)
                     
                 if vars_to_plot:
                     try:
@@ -419,33 +485,213 @@ def run():
                             if use_index_as_x:
                                 # Plot using DataFrame index
                                 for var in vars_to_plot:
-                                    plt.plot(data.index, data[var], label=var)
+                                    if turn_to_log:
+                                        # Check if variable is numeric
+                                        if not np.issubdtype(data[var].dtype, np.number):
+                                            st.write(f"Variable '{var}' is not numeric and will be skipped for log transformation.")
+                                            continue
+
+                                        # Check for non-positive values
+                                        if (data[var] <= 0).any():
+                                            non_positive_count = (data[var] <= 0).sum()
+                                            st.warning(f"⚠️ Variable '{var}' contains {non_positive_count} non-positive values. Adding small constant for log transformation.")
+                                            plot_data = data[var] + abs(data[var].min()) + 1e-10
+                                        else:
+                                            plot_data = data[var].copy()
+
+                                        # Apply selected log transformation
+                                        if log_base == "Natural log (ln)":
+                                            plot_data = np.log(plot_data)
+                                            label_suffix = " (ln)"
+                                        elif log_base == "Log base 10":
+                                            plot_data = np.log10(plot_data)
+                                            label_suffix = " (log10)"
+                                        else:  # Log base 2
+                                            plot_data = np.log2(plot_data)
+                                            label_suffix = " (log2)"
+
+                                        plt.plot(data.index, plot_data, label=f"{var}{label_suffix}")
+                                    else:
+                                        plt.plot(data.index, data[var], label=var)
                             else:
                                 # Plot using selected x-axis
                                 for var in vars_to_plot:
                                     if var != x_axis_col:  # Don't plot x against itself
-                                        plt.plot(data[x_axis_col], data[var], label=var)
+                                        if turn_to_log:
+                                            # Check for non-positive values in both x and y
+                                            x_data = data[x_axis_col]
+                                            y_data = data[var]
+                                            
+                                            # if (x_data <= 0).any():
+                                            #     st.warning(f"X-axis variable '{x_axis_col}' contains non-positive values. Adding small constant for log transformation.")
+                                            #     x_data = x_data + abs(x_data.min()) + 1e-10
+                                            
+                                            if (y_data <= 0).any():
+                                                st.warning(f"Variable '{var}' contains non-positive values. Adding small constant for log transformation.")
+                                                y_data = y_data + abs(y_data.min()) + 1e-10
+                                            
+                                            # Apply selected log transformation
+                                            if log_base == "Natural log (ln)":
+                                                # x_data = np.log(x_data)
+                                                y_data = np.log(y_data)
+                                            elif log_base == "Log base 10":
+                                                # x_data = np.log10(x_data)
+                                                y_data = np.log10(y_data)
+                                            else:  # Log base 2
+                                                # x_data = np.log2(x_data)
+                                                y_data = np.log2(y_data)
+                                            
+                                            plt.plot(x_data, y_data, label=var)
+                                        else:
+                                            plt.plot(data[x_axis_col], data[var], label=var)
                                 plt.xlabel(x_axis_col)
-                        
+
                         elif plot_type == "Scatter Plot":
-                            for var in vars_to_plot:
-                                if var != scatter_x:  # Don't plot x against itself
-                                    plt.scatter(data[scatter_x], data[var], label=var, alpha=0.7)
-                            plt.xlabel(scatter_x)
+                            if use_constant_x:
+                                # Distribution view - plot all y_vars at x=0 with optional jitter
+                                import random
+                                
+                                for i, var in enumerate(y_vars):
+                                    if turn_to_log:
+                                        # Check if variable is numeric
+                                        if not np.issubdtype(data[var].dtype, np.number):
+                                            st.warning(f"Variable '{var}' is not numeric and will be skipped.")
+                                            continue
+                                        
+                                        y_data = data[var].copy()
+                                        
+                                        # Handle non-positive values
+                                        if (y_data <= 0).any():
+                                            non_positive_count = (y_data <= 0).sum()
+                                            st.warning(f"⚠️ Variable '{var}' contains {non_positive_count} non-positive values. Adding small constant for log transformation.")
+                                            y_data = y_data + abs(y_data.min()) + 1e-10
+                                        
+                                        # Apply selected log transformation
+                                        if log_base == "Natural log (ln)":
+                                            y_data = np.log(y_data)
+                                            label_suffix = " (ln)"
+                                        elif log_base == "Log base 10":
+                                            y_data = np.log10(y_data)
+                                            label_suffix = " (log10)"
+                                        else:  # Log base 2
+                                            y_data = np.log2(y_data)
+                                            label_suffix = " (log2)"
+                                        
+                                        label = f"{var}{label_suffix}"
+                                    else:
+                                        y_data = data[var]
+                                        label = var
+                                    
+                                    # Create x values (constant with optional jitter)
+                                    if add_jitter:
+                                        # Add small random horizontal offset for each variable
+                                        x_values = np.full(len(y_data), i) + np.random.normal(0, 0.1, len(y_data))
+                                    else:
+                                        x_values = np.full(len(y_data), i)
+                                    
+                                    plt.scatter(x_values, y_data, label=label, alpha=0.7)
+                                
+                                plt.xlabel("Variable Index" + (" (with jitter)" if add_jitter else ""))
+                                plt.ylabel("Values")
+                                
+                                # Set x-axis labels to variable names - FIXED VERSION
+                                if y_vars:
+                                    plt.xticks(range(len(y_vars)), y_vars, rotation=45)
+                            
+                            else:
+                                for var in y_vars:  # Use y_vars instead of vars_to_plot
+                                    if turn_to_log:
+                                        # Check for non-positive values in both x and y
+                                        x_data = data[scatter_x].copy()
+                                        y_data = data[var].copy()
+                                        
+                                        if (x_data <= 0).any():
+                                            st.warning(f"X-axis variable '{scatter_x}' contains non-positive values. Adding small constant for log transformation.")
+                                            x_data = x_data + abs(x_data.min()) + 1e-10
+                                        
+                                        if (y_data <= 0).any():
+                                            st.warning(f"Variable '{var}' contains non-positive values. Adding small constant for log transformation.")
+                                            y_data = y_data + abs(y_data.min()) + 1e-10
+                                        
+                                        # Apply selected log transformation
+                                        if log_base == "Natural log (ln)":
+                                            x_data = np.log(x_data)
+                                            y_data = np.log(y_data)
+                                            label_suffix = " (ln)"
+                                        elif log_base == "Log base 10":
+                                            x_data = np.log10(x_data)
+                                            y_data = np.log10(y_data)
+                                            label_suffix = " (log10)"
+                                        else:  # Log base 2
+                                            x_data = np.log2(x_data)
+                                            y_data = np.log2(y_data)
+                                            label_suffix = " (log2)"
+                                        
+                                        plt.scatter(x_data, y_data, label=f"{var}{label_suffix}", alpha=0.7)
+                                    else: 
+                                        plt.scatter(data[scatter_x], data[var], label=var, alpha=0.7)
+                                
+                                plt.xlabel(scatter_x)
                         
                         elif plot_type == "Box Plot":
                             # Filter to numeric variables only for box plot
                             numeric_vars = [var for var in vars_to_plot if np.issubdtype(data[var].dtype, np.number)]
                             if numeric_vars:
-                                data[numeric_vars].boxplot(figsize=(plot_width, plot_height))
+                                if turn_to_log:
+                                    # Check for non-positive values before log transformation
+                                    plot_data = data[numeric_vars].copy()
+                                    if (plot_data <= 0).any().any():
+                                        st.warning("Log transformation requires positive values. Some non-positive values were found and will be handled.")
+                                        # Add small constant to make all values positive
+                                        plot_data = plot_data + abs(plot_data.min().min()) + 1e-10
+                                    
+                                    # Apply selected log transformation
+                                    if log_base == "Natural log (ln)":
+                                        plot_data = np.log(plot_data)
+                                        title_suffix = " (ln scale)"
+                                    elif log_base == "Log base 10":
+                                        plot_data = np.log10(plot_data)
+                                        title_suffix = " (log10 scale)"
+                                    else:  # Log base 2
+                                        plot_data = np.log2(plot_data)
+                                        title_suffix = " (log2 scale)"
+                                    
+                                    plot_data.boxplot(figsize=(plot_width, plot_height))
+                                    plt.suptitle(f"Box Plot{title_suffix}")
+                                else:
+                                    data[numeric_vars].boxplot(figsize=(plot_width, plot_height))
+                                    plt.suptitle("Box Plot")
                             else:
                                 st.warning("Box plots require numeric variables")
-                        
+
                         elif plot_type == "Histogram":
                             # Filter to numeric variables only for histogram
                             numeric_vars = [var for var in vars_to_plot if np.issubdtype(data[var].dtype, np.number)]
                             if numeric_vars:
-                                data[numeric_vars].hist(bins=hist_bins, figsize=(plot_width, plot_height), alpha=0.7)
+                                if turn_to_log:
+                                    # Check for non-positive values before log transformation
+                                    plot_data = data[numeric_vars].copy()
+                                    if (plot_data <= 0).any().any():
+                                        st.warning("Log transformation requires positive values. Some non-positive values were found and will be handled.")
+                                        # Add small constant to make all values positive
+                                        plot_data = plot_data + abs(plot_data.min().min()) + 1e-10
+                                    
+                                    # Apply selected log transformation
+                                    if log_base == "Natural log (ln)":
+                                        plot_data = np.log(plot_data)
+                                        title_suffix = " (ln scale)"
+                                    elif log_base == "Log base 10":
+                                        plot_data = np.log10(plot_data)
+                                        title_suffix = " (log10 scale)"
+                                    else:  # Log base 2
+                                        plot_data = np.log2(plot_data)
+                                        title_suffix = " (log2 scale)"
+                                    
+                                    plot_data.hist(bins=hist_bins, figsize=(plot_width, plot_height), alpha=0.7)
+                                    plt.suptitle(f"Histogram{title_suffix}")
+                                else:
+                                    data[numeric_vars].hist(bins=hist_bins, figsize=(plot_width, plot_height), alpha=0.7)
+                                    plt.suptitle("Histogram")
                             else:
                                 st.warning("Histograms require numeric variables")
                         
@@ -491,7 +737,7 @@ def run():
                                 st.warning("Correlation heatmap requires at least 2 numeric variables")
                         
                         # Add plot decorations (except for heatmap and box plot)
-                        if plot_type not in ["Heatmap (Correlation)", "Box Plot"]:
+                        if plot_type not in ["Heatmap (Correlation)", "Box Plot", "Histogram"]:
                             plt.ylabel("Value")
                             plt.title(f"{plot_type} of Selected Variables")
                             plt.legend()
