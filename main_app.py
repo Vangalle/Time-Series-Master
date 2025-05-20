@@ -40,8 +40,12 @@ if 'file_name' not in st.session_state:
     st.session_state.file_name = None
 if 'input_vars' not in st.session_state:
     st.session_state.input_vars = []
+if 'input_vars_default' not in st.session_state:
+    st.session_state.input_vars_default = []
 if 'target_vars' not in st.session_state:
     st.session_state.target_vars = []
+if 'target_vars_default' not in st.session_state:
+    st.session_state.target_vars_default = []
 if 'config' not in st.session_state:
     st.session_state.config = {}
 if 'trained_model' not in st.session_state:
@@ -75,6 +79,8 @@ if 'train_ratio' not in st.session_state:
     st.session_state.train_ratio = None
 if 'val_ratio' not in st.session_state:
     st.session_state.val_ratio = None
+if 'persistent_builtin_model_type' not in st.session_state:
+    st.session_state.persistent_builtin_model_type = "Deep Learning"
 if 'persistent_dl_model_type' not in st.session_state:
     st.session_state.persistent_dl_model_type = "LSTM"
 if 'persistent_linear_model_type' not in st.session_state:

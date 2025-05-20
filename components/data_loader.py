@@ -145,12 +145,95 @@ def run():
                 # Show file info
                 st.sidebar.success(f"File loaded: {uploaded_file.name}")
                 st.sidebar.info(f"Rows: {data.shape[0]}, Columns: {data.shape[1]}")
+                st.session_state.target_vars = []
                 
             except Exception as e:
                 st.sidebar.error(f"Error reading file: {e}")
                 st.session_state.data = None
                 st.session_state.file_name = None
 
+        # Initialize import_mode in session state if it doesn't exist
+        if 'import_mode' not in st.session_state:
+            st.session_state.import_mode = False
+        
+        # Toggle button to enter/exit import mode
+        if st.button("Import Saved Configuration"):
+            st.session_state.import_mode = not st.session_state.import_mode
+        
+        # If in import mode, show the configuration selection interface
+        if st.session_state.import_mode:
+            # List available data configurations
+            data_configs_dir = Path("data_configs")
+            if data_configs_dir.exists():
+                # Find all config.json files within subdirectories
+                config_files = list(data_configs_dir.glob("*/config.json"))
+                if config_files:
+                    # Sort by modification time (newest first)
+                    config_files = sorted(config_files, key=lambda x: x.stat().st_mtime, reverse=True)
+                    
+                    # Format directory names nicely for selection
+                    config_labels = [f"{x.parent.name} ({datetime.fromtimestamp(x.stat().st_mtime).strftime('%Y-%m-%d %H:%M')})" 
+                                    for x in config_files]
+                    
+                    # Let user select a configuration
+                    config_index = st.selectbox(
+                        "Select a saved configuration",
+                        range(len(config_files)),
+                        format_func=lambda i: config_labels[i]
+                    )
+                    
+                    if st.button("Load Selected Configuration"):
+                        selected_config = config_files[config_index]
+                        # Load the configuration
+                        try:
+                            with open(selected_config, "r") as f:
+                                config = json.load(f)
+                            
+                            # Look for the data file in the same directory
+                            config_dir = selected_config.parent
+                            data_files = list(config_dir.glob("data.*"))
+                            
+                            if data_files:
+                                imported_file = data_files[0]
+                                if imported_file.suffix == ".csv":
+                                    data = pd.read_csv(imported_file)
+                                else:
+                                    data = pd.read_excel(imported_file)
+                                
+                                # Try to convert string columns to datetime if they were datetime in original
+                                for col in data:
+                                    if col in data and data[col].dtype == 'object':
+                                        try:
+                                            data[col] = pd.to_datetime(data[col])
+                                        except:
+                                            pass
+                                
+                                # Update session state
+                                st.session_state.data = data
+                                st.session_state.file_name = config.get("file_name")
+                                st.session_state.input_vars_default = config.get("input_variables", [])
+                                st.session_state.target_vars_default = config.get("target_variables", [])
+                                
+                                # Exit import mode
+                                st.session_state.import_mode = False
+                                
+                                st.success("Configuration and data loaded successfully!")
+                                st.rerun()
+                            else:
+                                st.warning("Could not find associated data file in the configuration directory.")
+                        except Exception as e:
+                            st.error(f"Error loading configuration: {e}")
+                else:
+                    st.info("No saved configurations found.")
+                    if st.button("Exit Import Mode"):
+                        st.session_state.import_mode = False
+                        st.rerun()
+            else:
+                st.info("No data_configs directory found.")
+                if st.button("Exit Import Mode"):
+                    st.session_state.import_mode = False
+                    st.rerun()
+    
     # Main panel for data preview and variable selection
     if st.session_state.data is not None:
 
@@ -292,30 +375,54 @@ def run():
             st.write("Select Input Variables:")
             
             # Organize columns by type
+            numeric_defaults = [col for col in st.session_state.input_vars_default if col in numeric_cols]
             st.write("Numeric Variables:")
             # Filter default values to only include variables that exist in the options
-            numeric_inputs = st.multiselect(
-                "Select numeric input variables",
-                numeric_cols
-            )
+            if len(numeric_defaults)>0:
+                numeric_inputs = st.multiselect(
+                    "Select numeric input variables",
+                    numeric_cols,
+                    default=numeric_defaults
+                )
+            else:
+                numeric_inputs = st.multiselect(
+                    "Select numeric input variables",
+                    numeric_cols
+                )
             
             if datetime_cols:
                 st.write("Date/Time Variables:")
                 # Filter default values for datetime columns
-                datetime_inputs = st.multiselect(
-                    "Select datetime input variables",
-                    datetime_cols
-                )
+                datetime_defaults = [col for col in st.session_state.input_vars_default if col in datetime_cols]
+                if len(datetime_defaults)>0:
+                    datetime_inputs = st.multiselect(
+                        "Select datetime input variables",
+                        datetime_cols,
+                        default=datetime_defaults
+                    )
+                else:
+                    datetime_inputs = st.multiselect(
+                        "Select datetime input variables",
+                        datetime_cols
+                    )
             else:
                 datetime_inputs = []
                 
             if categorical_cols:
                 st.write("Categorical Variables:")
                 # Filter default values for categorical columns
-                categorical_inputs = st.multiselect(
-                    "Select categorical input variables",
-                    categorical_cols
-                )
+                categorical_defaults = [col for col in st.session_state.input_vars_default if col in categorical_cols]
+                if len(categorical_defaults)>0:
+                    categorical_inputs = st.multiselect(
+                        "Select categorical input variables",
+                        categorical_cols,
+                        default=categorical_defaults
+                    )
+                else:
+                    categorical_inputs = st.multiselect(
+                        "Select categorical input variables",
+                        categorical_cols
+                    )
             else:
                 categorical_inputs = []
             
@@ -325,7 +432,7 @@ def run():
             else:
                 st.session_state.datetime_column = True
             selected_inputs = numeric_inputs + datetime_inputs + categorical_inputs
-            st.session_state.input_vars = selected_inputs
+            
             
             # Show number of selected inputs
             st.info(f"Selected {len(selected_inputs)} input variables")
@@ -336,14 +443,18 @@ def run():
             # Usually targets are numeric, but allow any type
             target_options = data.columns.tolist()
             # Remove already selected inputs
-            available_targets = [col for col in target_options if col not in datetime_cols]
-            
-            selected_targets = st.multiselect(
-                "Select target variables",
-                available_targets
-            )
-            
-            st.session_state.target_vars = selected_targets
+            available_targets = [col for col in target_options if col not in datetime_cols and col not in categorical_cols]
+            if len(st.session_state.target_vars_default)>0:
+                selected_targets = st.multiselect(
+                    "Select target variables",
+                    available_targets,
+                    default=st.session_state.target_vars_default
+                )
+            else:
+                selected_targets = st.multiselect(
+                    "Select target variables",
+                    available_targets
+                )
             
             # Show number of selected targets
             st.info(f"Selected {len(selected_targets)} target variables")
@@ -765,27 +876,35 @@ def run():
         # Save configuration section
         st.subheader("Save Configuration")
         
-        if st.button("Save Current Selection"):
+        # Add this in the "Save Configuration" section after the existing "Save Current Selection" button
+        if st.button("Export Data and Selections"):
             if selected_inputs and selected_targets:
-                # Update session state
-                st.session_state.config = {
+                # Create directories
+                export_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                export_dir = f"data_configs/data_export_{export_timestamp}"
+                os.makedirs(export_dir, exist_ok=True)
+                
+                # Save configuration
+                config = {
                     "file_name": st.session_state.file_name,
                     "input_variables": st.session_state.input_vars,
                     "target_variables": st.session_state.target_vars
                 }
+                with open(f"{export_dir}/config.json", "w") as f:
+                    json.dump(config, f, indent=4)
                 
-                # Create a directory if it doesn't exist
-                os.makedirs("configs", exist_ok=True)
+                # Export data file
+                if st.session_state.file_name.endswith('.csv'):
+                    data.to_csv(f"{export_dir}/data.csv", index=False)
+                else:
+                    data.to_excel(f"{export_dir}/data.xlsx", index=False)
                 
-                # Save configuration to a JSON file
-                config_file = f"configs/config_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-                with open(config_file, "w") as f:
-                    json.dump(st.session_state.config, f, indent=4)
-                
-                st.success(f"Configuration saved as {config_file}")
-                st.info("You can now proceed to the Model Training page")
+                st.success(f"Data and selection exported to {export_dir}")
             else:
                 st.error("Please select at least one input and one target variable")
+        
+        st.session_state.input_vars = selected_inputs
+        st.session_state.target_vars = selected_targets
         
         # Display current configuration summary
         if st.session_state.input_vars or st.session_state.target_vars:
@@ -808,7 +927,7 @@ def run():
                     # Update session state for main app
                     st.session_state.page = "model_training"
                     st.rerun()
-                
+
     else:
         # Show instructions when no data is loaded
         st.info("Please upload a CSV or Excel file using the sidebar to get started.")

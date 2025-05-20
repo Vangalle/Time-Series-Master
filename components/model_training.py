@@ -822,7 +822,7 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
 
 
 def train_non_trainable_models(model, train_loader, val_loader, criterion, device,
-                          loss_chart, progress_bar, status_text, uses_positional_encoding=False):
+                               progress_bar, status_text, uses_positional_encoding=False):
     """
     Handle statistical/non-trainable models that don't require optimization.
     Instead of training, this function evaluates the model on training and validation data.
@@ -870,12 +870,6 @@ def train_non_trainable_models(model, train_loader, val_loader, criterion, devic
     
     val_loss /= len(val_loader)
     training_history['val_loss'].append(val_loss)
-    
-    # Update chart and status
-    loss_chart.add_rows(pd.DataFrame({
-        'Training Loss': [train_loss],
-        'Validation Loss': [val_loss]
-    }))
     
     status_text.text(f"Statistical model evaluation - Train: {train_loss:.6f}, Val: {val_loss:.6f}")
     progress_bar.progress(1.0)  # Set progress to 100%
@@ -1721,29 +1715,38 @@ def run():
             st.session_state.lr_scheduler_index = lr_scheduler_options.index(lr_scheduler_type)
   
         
-        # Create containers for visualization
-        training_container = st.container()
-        with training_container:
-            st.subheader("Training Progress")
-            col1, col2 = st.columns([3, 1])
-            
-            with col1:
-                # Initialize the chart with empty data
-                loss_chart = st.line_chart(pd.DataFrame({
-                    'Training Loss': [],
-                    'Validation Loss': []
-                }), color=["#2B66C2", "#93C6F9"])
-            
-            with col2:
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-        
         try:
-            # Prepare data
-            status_text.text("Preparing data...")
-            
             # Extract parameters
             model_params = selected_model
+
+            # Check if this is a statistical model (no trainable parameters)
+            st.session_state.is_statistical_model = model_params["model_name"] in [
+                "Statistical SMA", "Statistical Exponential Smoothing", 
+                "Statistical Linear Regression", "ARIMA"
+            ]
+            if st.session_state.is_statistical_model is not True:
+                # Create containers for visualization
+                training_container = st.container()
+                with training_container:
+                    st.subheader("Training Progress")
+                    col1, col2 = st.columns([3, 1])
+                    
+                    with col1:
+                        # Initialize the chart with empty data
+                        loss_chart = st.line_chart(pd.DataFrame({
+                            'Training Loss': [],
+                            'Validation Loss': []
+                        }), color=["#2B66C2", "#93C6F9"])
+                    
+                    with col2:
+                        progress_bar = st.progress(0)
+                        status_text = st.empty()
+            else:
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                # Prepare data
+                status_text.text("Preparing data...")
+            
             input_length = model_params["input_length"]
             output_length = model_params["output_length"]
             
@@ -1971,12 +1974,6 @@ def run():
                 # Initialize the custom loss
                 loss_class = custom_losses[model_params["custom_loss"]]
                 criterion = loss_class()
-            
-            # Check if this is a statistical model (no trainable parameters)
-            st.session_state.is_statistical_model = model_params["model_name"] in [
-                "Statistical SMA", "Statistical Exponential Smoothing", 
-                "Statistical Linear Regression", "ARIMA"
-            ]
 
             if st.session_state.is_statistical_model:
                 # For statistical models, we don't need an optimizer or scheduler
@@ -1987,7 +1984,7 @@ def run():
                 status_text.text("Evaluating statistical model (no training required)...")
                 best_model_state, training_history = train_non_trainable_models(
                     model, train_loader, val_loader, criterion, device,
-                    loss_chart, progress_bar, status_text, 
+                    progress_bar, status_text, 
                     uses_positional_encoding=st.session_state.uses_positional_encoding
                 )
             else:
@@ -2105,8 +2102,9 @@ def run():
             import traceback
             st.code(traceback.format_exc())
     
+    # st.write(st.session_state.is_statistical_model )
     # Results section (only show if model has been trained)
-    if st.session_state.trained_model is not None and st.session_state.is_statistical_model is None:
+    if st.session_state.trained_model is not None and st.session_state.is_statistical_model is not True:
         st.header("Training Results")
         
         st.subheader("Training Analysis")
