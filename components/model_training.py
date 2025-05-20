@@ -1071,6 +1071,26 @@ def run():
     if custom_losses:
         loss_options.append("Custom Loss")
     
+    dl_model_options = ["LSTM", "GRU", "RNN", "Transformer", "EncoderTransformer"]
+    pos_options = ["Sinusoidal", "Learned"]
+    linear_model_options = ["Direct Linear Projection Network", 
+                                    "Statistical SMA", 
+                                    "Statistical Exponential Smoothing", 
+                                    "Statistical Linear Regression",
+                                    "ARIMA"]
+    lr_scheduler_options = ["ReduceLROnPlateau", "StepLR", "CosineAnnealingLR"]
+    
+    # Initialize vars to avoid error, the value does not affect later implementation
+    dl_model_type = None
+    linear_model_type = None
+    num_layers = 2
+    hidden_dim = 64
+    use_early_stopping = True
+    patience = 15
+    d_model = 64
+    lr_scheduler_type = None
+    builtin_model_type = "Built-in"
+
     # Check if data and variables are available
     if (st.session_state.data is None or 
         not st.session_state.input_vars or 
@@ -1110,10 +1130,96 @@ def run():
         st.write(f"**Target Variables:** {', '.join(target_vars)}")
     
     # Model selection and parameters section
-    st.header("Model Selection")
+    st.header("Model Configuration")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        # Input and output sequence length
+        input_length = st.number_input("Input Sequence Length", min_value=1, max_value=1000,
+                                        value=st.session_state.input_length, step=3)
+        
+        output_length = st.number_input("Output Sequence Length", min_value=1, max_value=1000,
+                                        value=st.session_state.output_length, step=3)
+        
+        # Loss function selection
+        loss_function = st.selectbox(
+            "Loss Function",
+            loss_options,
+            index=loss_options.index(st.session_state.loss_function),
+            key="linear_loss"
+        )
+
+    with col2:
+        # Dataset splits
+        try:
+            # Calculate minimum required samples for validation and test sets
+            min_samples_needed = input_length + output_length
+            min_ratio_needed = min_samples_needed / data.shape[0]
+            
+            # Maximum training ratio ensuring validation and test sets have minimum samples
+            max_train_ratio = 1.0 - (2 * min_ratio_needed)
+            
+            if max_train_ratio < 0.1:
+                st.error(f"Not enough data for proper splitting with current parameters.")
+                st.info(f"Data: {data.shape[0]} rows | Min samples needed per split: {min_samples_needed}")
+                st.stop()  # Stop execution to prevent further issues
+            
+            # Training ratio input with adaptive default value
+            default_train = min(0.8, max_train_ratio)  # Try for 80% but respect maximum
+            train_ratio = st.number_input(
+                "Training Set Ratio", 
+                min_value=0.1, 
+                max_value=float(max_train_ratio), 
+                value=default_train if st.session_state.train_ratio is None else st.session_state.train_ratio,
+                step=0.05 if max_train_ratio > 0.2 else 0.01,
+                format="%.2f",
+                help = f"Maximum value: {max_train_ratio:.2f} (ensures validation and test sets have enough samples)"
+            )
+            
+            # Calculate remaining ratio for validation and test
+            remaining_ratio = 1.0 - train_ratio
+            
+            # Validation ratio input with proper constraints
+            max_val_ratio = remaining_ratio - min_ratio_needed  # Ensure test set gets minimum
+            default_val = min(0.1, max_val_ratio)  # Try for 10% but respect maximum
+            val_ratio = st.number_input(
+                "Validation Set Ratio", 
+                min_value=float(min_ratio_needed), 
+                max_value=float(max_val_ratio),
+                value=default_val if st.session_state.val_ratio is None else st.session_state.val_ratio,
+                step=0.05 if max_val_ratio > 0.2 else 0.01,
+                format="%.2f",
+                help = f"Maximum value: {max_val_ratio:.2f} (ensures test set has enough samples)"
+            )
+            
+            # Calculate and display test ratio
+            test_ratio = 1.0 - train_ratio - val_ratio
+            st.write(f"Test Set Ratio: {test_ratio:.2f}")
+
+        except Exception as e:
+            st.error(f"Dataset splitting error: {str(e)}")
+            st.warning("Please adjust input/output lengths or check your dataset dimensions.")
+
+        selected_custom_loss = None
+        if loss_function == "Custom Loss":
+            selected_custom_loss = st.selectbox(
+                "Select Custom Loss",
+                list(custom_losses.keys()),
+                index=st.session_state.seletced_custom_loss,
+                format_func=lambda x: x.split(".")[-1]  # Show class name only
+            )
+            
+            # Display loss information
+            if selected_custom_loss:
+                loss_class = custom_losses[selected_custom_loss]
+                loss_info = get_loss_info(loss_class)
+                st.info(f"**Description:** {loss_info['description']}")
     
     # Create tabs for different model categories
     # model_tabs = st.tabs(["Built-in Models", "Custom Models"])
+
+    st.subheader("Model Selection")
 
     # Replace the model_type selection (around line 775)
     model_type = st.selectbox("Select Model Type", ["Built-in", "Custom"], 
@@ -1123,12 +1229,12 @@ def run():
     st.session_state.persistent_model_type = model_type
     
     if model_type == "Built-in":  # Built-in Models
-        st.subheader("Built-in Model Selection")
         
         # Use nested tabs for deep learning vs linear
         # builtin_tabs = st.tabs(["Deep Learning Models", "Linear Models"])
-        builtin_model_options = ["Deep Learning", "Linear"]
-        builtin_model_type = st.selectbox("Select Built-in Model Type", builtin_model_options)
+        builtin_model_type = st.selectbox("Select Built-in Model Type", ["Deep Learning", "Linear"], 
+                                     key="builtin_model_type",
+                                     index=0 if st.session_state.persistent_builtin_model_type == "Deep Learning" else 1)
         
         if builtin_model_type == "Deep Learning":
             col1, col2 = st.columns(2)
@@ -1137,35 +1243,66 @@ def run():
                 # Model type selection
                 dl_model_type = st.selectbox(
                     "Select Model Type",
-                    ["LSTM", "GRU", "RNN", "Transformer", "EncoderTransformer"],
+                    dl_model_options,
+                    index=dl_model_options.index(st.session_state.persistent_dl_model_type)
                 )
                 
                 # Model depth selection
-                num_layers = st.number_input("Number of Layers", min_value=1, max_value=20, value=2, step=1)
+                num_layers = st.number_input("Number of Layers", min_value=1, max_value=20, 
+                                             value=st.session_state.num_layers, step=1)
                 
                 # Hidden dimension selection
-                hidden_dim = st.number_input("Hidden Dimension", min_value=32, max_value=2048, value=64, step=32,
+                hidden_dim = st.number_input("Hidden Dimension", min_value=32, max_value=2048, 
+                                             value=st.session_state.hidden_dim, step=32,
                                              help="For Transformer models, it's the FFN dimension and is " \
                                              "often set to 4 times the d_model.")
 
-                # If Transformer model is selected, add num_heads parameter
-                if dl_model_type == "Transformer" or dl_model_type == "EncoderTransformer":
-
-                    d_model = st.number_input("Model Dimension", min_value=32, max_value=2048, value=64, step=32)
-
-                    # Calculate valid divisors of d_model
-                    divisors = [i for i in range(1, d_model + 1) if d_model % i == 0]
-                    
-                    # Default to a value close to 8 (common default) if possible
-                    default_index = min(range(len(divisors)), key=lambda i: abs(divisors[i] - 8))
-                    
-                    num_heads = st.selectbox(
-                        "Number of Attention Heads",
-                        options=divisors,
-                        index=default_index,
-                        help="For Transformer models, number of heads must divide the hidden dimension evenly."
+                
+            with col2:
+                
+                # Early stopping parameters
+                use_early_stopping = st.checkbox("Use Early Stopping", 
+                                                 value=st.session_state.use_early_stopping)
+                if use_early_stopping:
+                    patience = st.number_input("Early Stopping Patience", min_value=1, max_value=100,
+                                               value=st.session_state.patience, step=1)
+                else:
+                    patience = 0
+                
+                # Learning rate scheduler
+                use_lr_scheduler = st.checkbox("Use Learning Rate Scheduler", value=True)
+                
+                if use_lr_scheduler:
+                    lr_scheduler_type = st.selectbox(
+                        "Learning Rate Scheduler",
+                        lr_scheduler_options,
+                        index=st.session_state.lr_scheduler_index
                     )
-                    if st.session_state.datetime_column == True:
+            
+            # If Transformer model is selected, add num_heads parameter
+            if dl_model_type == "Transformer" or dl_model_type == "EncoderTransformer":
+            
+                if st.session_state.datetime_column == True:
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        d_model = st.number_input("Model Dimension", min_value=32, max_value=2048, 
+                                                  value=st.session_state.d_model, step=32)
+
+                        # Calculate valid divisors of d_model
+                        divisors = [i for i in range(1, d_model + 1) if d_model % i == 0]
+                        
+                        # Default to a value close to 4 (common default) if possible
+                        default_index = min(range(len(divisors)), key=lambda i: abs(divisors[i] - 4))
+                        
+                        num_heads = st.selectbox(
+                            "Number of Attention Heads",
+                            options=divisors,
+                            index=default_index,
+                            help="For Transformer models, number of heads must divide the hidden dimension evenly." \
+                            "This will be reset every time when choosing different model."
+                        )
+
+                    with col2:
                         st.session_state.uses_positional_encoding = st.checkbox(
                             "Use Positional Encoding",
                             value=True,
@@ -1175,127 +1312,46 @@ def run():
                         if st.session_state.uses_positional_encoding:
                             st.session_state.positional_encoding_type = st.selectbox(
                                 "Positional Encoding Type",
-                                ["Sinusoidal", "Learned"],
-                                index=0,
+                                pos_options,
+                                index=st.session_state.positional_encoding_index,
                                 help="Select the type of positional encoding to use."
                             )
-                    else:
-                        st.session_state.uses_positional_encoding = False
-                        st.session_state.positional_encoding_type = "sinusoidal"
-
                 else:
+                    d_model = st.number_input("Model Dimension", min_value=32, max_value=2048, 
+                                              value=st.session_state.d_model, step=32)
+
+                    # Calculate valid divisors of d_model
+                    divisors = [i for i in range(1, d_model + 1) if d_model % i == 0]
+                    
+                    # Default to a value close to 4 (common default) if possible
+                    default_index = min(range(len(divisors)), key=lambda i: abs(divisors[i] - 4))
+                    
+                    num_heads = st.selectbox(
+                        "Number of Attention Heads",
+                        options=divisors,
+                        index=default_index,
+                        help="For Transformer models, number of heads must divide the hidden dimension evenly." \
+                        "This will be reset every time when choosing different model."
+                    )
                     st.session_state.uses_positional_encoding = False
-                    num_heads = 8  # Default value for other models (won't be used)
-                
-                # Input and output sequence length
-                input_length = st.number_input("Input Sequence Length", min_value=1, max_value=1000, value=12, step=3)
+                    st.session_state.positional_encoding_type = "sinusoidal"
 
-                output_length = st.number_input("Output Sequence Length", min_value=1, max_value=1000, value=12, step=3)
-                
-            with col2:
-                # Loss function selection
-                loss_function = st.selectbox(
-                    "Loss Function",
-                    loss_options,
-                    index=0
-                )
+            else:
+                st.session_state.uses_positional_encoding = False
+                num_heads = 8  # Default value for other models (won't be used)
 
-                selected_custom_loss = None
-                if loss_function == "Custom Loss":
-                    selected_custom_loss = st.selectbox(
-                        "Select Custom Loss",
-                        list(custom_losses.keys()),
-                        format_func=lambda x: x.split(".")[-1]  # Show class name only
-                    )
-                    
-                    # Display loss information
-                    if selected_custom_loss:
-                        loss_class = custom_losses[selected_custom_loss]
-                        loss_info = get_loss_info(loss_class)
-                        st.info(f"**Description:** {loss_info['description']}")
-                
-                # Dataset splits
-                try:
-                    # Calculate minimum required samples for validation and test sets
-                    min_samples_needed = input_length + output_length
-                    min_ratio_needed = min_samples_needed / data.shape[0]
-                    
-                    # Maximum training ratio ensuring validation and test sets have minimum samples
-                    max_train_ratio = 1.0 - (2 * min_ratio_needed)
-                    
-                    if max_train_ratio < 0.1:
-                        st.error(f"Not enough data for proper splitting with current parameters.")
-                        st.info(f"Data: {data.shape[0]} rows | Min samples needed per split: {min_samples_needed}")
-                        st.stop()  # Stop execution to prevent further issues
-                    
-                    # Training ratio input with adaptive default value
-                    default_train = min(0.8, max_train_ratio)  # Try for 80% but respect maximum
-                    train_ratio = st.number_input(
-                        "Training Set Ratio", 
-                        min_value=0.1, 
-                        max_value=float(max_train_ratio), 
-                        value=default_train,
-                        step=0.05 if max_train_ratio > 0.2 else 0.01,
-                        format="%.2f",
-                        help = f"Maximum value: {max_train_ratio:.2f} (ensures validation and test sets have enough samples)"
-                    )
-                    
-                    # Calculate remaining ratio for validation and test
-                    remaining_ratio = 1.0 - train_ratio
-                    
-                    # Validation ratio input with proper constraints
-                    max_val_ratio = remaining_ratio - min_ratio_needed  # Ensure test set gets minimum
-                    default_val = min(0.1, max_val_ratio)  # Try for 10% but respect maximum
-                    val_ratio = st.number_input(
-                        "Validation Set Ratio", 
-                        min_value=float(min_ratio_needed), 
-                        max_value=float(max_val_ratio),
-                        value=default_val,
-                        step=0.05 if max_val_ratio > 0.2 else 0.01,
-                        format="%.2f",
-                        help = f"Maximum value: {max_val_ratio:.2f} (ensures test set has enough samples)"
-                    )
-                    
-                    # Calculate and display test ratio
-                    test_ratio = 1.0 - train_ratio - val_ratio
-                    st.write(f"Test Set Ratio: {test_ratio:.2f}")
-
-                except Exception as e:
-                    st.error(f"Dataset splitting error: {str(e)}")
-                    st.warning("Please adjust input/output lengths or check your dataset dimensions.")
-                
-                # Early stopping parameters
-                use_early_stopping = st.checkbox("Use Early Stopping", value=True)
-                if use_early_stopping:
-                    patience = st.number_input("Early Stopping Patience", min_value=1, max_value=100,
-                                               value=15, step=1)
-                else:
-                    patience = 0
-                
-                # Learning rate scheduler
-                use_lr_scheduler = st.checkbox("Use Learning Rate Scheduler", value=True)
-                lr_scheduler_type = None
-                if use_lr_scheduler:
-                    lr_scheduler_type = st.selectbox(
-                        "Learning Rate Scheduler",
-                        ["ReduceLROnPlateau", "StepLR", "CosineAnnealingLR"],
-                        index=0
-                    )
-            
-            # Training parameters
-            st.subheader("Training Parameters")
-            
             col1, col2, col3 = st.columns(3)
-            
             with col1:
-                learning_rate = st.number_input("Learning Rate", min_value=0.0001, max_value=0.1, value=0.001, 
+                learning_rate = st.number_input("Learning Rate", min_value=0.0001, max_value=0.1, 
+                                                value=st.session_state.learning_rate, 
                                                 format="%.4f", step=0.0001)
-                
             with col2:
-                batch_size = st.number_input("Batch Size", min_value=1, max_value=2048, value=64, step=64)
-                
+                batch_size = st.number_input("Batch Size", min_value=1, max_value=2048, 
+                                             value=st.session_state.batch_size, step=64)
+            
             with col3:
-                epochs = st.number_input("Maximum Epochs", min_value=1, max_value=1000, value=100, step=20)
+                epochs = st.number_input("Maximum Epochs", min_value=1, max_value=1000, 
+                                         value=st.session_state.epochs, step=20)
             
             selected_model = {
                 "type": "deep_learning",
@@ -1328,151 +1384,58 @@ def run():
             
             linear_model_type = st.selectbox(
                                     "Select Linear Model Type",
-                                    ["Direct Linear Projection Network", 
-                                    "Statistical SMA", 
-                                    "Statistical Exponential Smoothing", 
-                                    "Statistical Linear Regression",
-                                    "ARIMA"]
+                                    linear_model_options,
+                                    index=linear_model_options.index(st.session_state.persistent_linear_model_type)
                                 )
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                # Input and output sequence length
-                input_length = st.number_input("Input Sequence Length", min_value=1, max_value=1000,
-                                                value=12, step=3, key="linear_input_length")
-                output_length = st.number_input("Output Sequence Length", min_value=1, max_value=1000,
-                                                value=12, step=3, key="linear_output_length")
                 
-                # Loss function selection
-                loss_function = st.selectbox(
-                    "Loss Function",
-                    loss_options,
-                    index=0,
-                    key="linear_loss"
-                )
+            # Additional parameters for statistical models
+            if linear_model_type == "Statistical SMA":
+                window_size = st.slider("Window Size", min_value=2, max_value=min(20, input_length), 
+                                    value=min(5, input_length), step=1)
+
+            elif linear_model_type == "Statistical Exponential Smoothing":
+                use_auto_alpha = st.checkbox("Auto-optimize smoothing parameter", value=True)
+                if not use_auto_alpha:
+                    alpha = st.slider("Smoothing parameter (alpha)", min_value=0.0, max_value=1.0, 
+                                    value=0.3, step=0.05)
+                else:
+                    alpha = None
                 
-                selected_custom_loss = None
-                if loss_function == "Custom Loss":
-                    selected_custom_loss = st.selectbox(
-                        "Select Custom Loss",
-                        list(custom_losses.keys()),
-                        format_func=lambda x: x.split(".")[-1]  # Show class name only
-                    )
-                    
-                    # Display loss information
-                    if selected_custom_loss:
-                        loss_class = custom_losses[selected_custom_loss]
-                        loss_info = get_loss_info(loss_class)
-                        st.info(f"**Description:** {loss_info['description']}")
+                use_trend = st.checkbox("Include trend (Holt's method)", value=False)
+
+            elif linear_model_type == "ARIMA":
+                # ARIMA order parameters
+                p = st.slider("Autoregressive order (p)", min_value=0, max_value=5, value=1, step=1)
+                d = st.slider("Difference order (d)", min_value=0, max_value=2, value=1, step=1)
+                q = st.slider("Moving average order (q)", min_value=0, max_value=5, value=1, step=1)
                 
-                # Additional parameters for statistical models
-                if linear_model_type == "Statistical SMA":
-                    window_size = st.slider("Window Size", min_value=2, max_value=min(20, input_length), 
-                                        value=min(5, input_length), step=1)
-
-                elif linear_model_type == "Statistical Exponential Smoothing":
-                    use_auto_alpha = st.checkbox("Auto-optimize smoothing parameter", value=True)
-                    if not use_auto_alpha:
-                        alpha = st.slider("Smoothing parameter (alpha)", min_value=0.0, max_value=1.0, 
-                                        value=0.3, step=0.05)
-                    else:
-                        alpha = None
+                use_auto_arima = st.checkbox("Use Auto ARIMA (if available)", value=True)
+                
+                use_seasonal = st.checkbox("Include seasonal component", value=False)
+                if use_seasonal:
+                    season_length = st.number_input("Season length (s)", min_value=2, value=12, step=1)
                     
-                    use_trend = st.checkbox("Include trend (Holt's method)", value=False)
-
-                elif linear_model_type == "ARIMA":
-                    # ARIMA order parameters
-                    p = st.slider("Autoregressive order (p)", min_value=0, max_value=5, value=1, step=1)
-                    d = st.slider("Difference order (d)", min_value=0, max_value=2, value=1, step=1)
-                    q = st.slider("Moving average order (q)", min_value=0, max_value=5, value=1, step=1)
+                    # Seasonal parameters
+                    P = st.slider("Seasonal autoregressive order (P)", min_value=0, max_value=2, value=0, step=1)
+                    D = st.slider("Seasonal difference order (D)", min_value=0, max_value=1, value=0, step=1)
+                    Q = st.slider("Seasonal moving average order (Q)", min_value=0, max_value=2, value=0, step=1)
                     
-                    use_auto_arima = st.checkbox("Use Auto ARIMA (if available)", value=True)
-                    
-                    use_seasonal = st.checkbox("Include seasonal component", value=False)
-                    if use_seasonal:
-                        season_length = st.number_input("Season length (s)", min_value=2, value=12, step=1)
-                        
-                        # Seasonal parameters
-                        P = st.slider("Seasonal autoregressive order (P)", min_value=0, max_value=2, value=0, step=1)
-                        D = st.slider("Seasonal difference order (D)", min_value=0, max_value=1, value=0, step=1)
-                        Q = st.slider("Seasonal moving average order (Q)", min_value=0, max_value=2, value=0, step=1)
-                        
-                        seasonal_order = (P, D, Q, season_length)
-                    else:
-                        seasonal_order = None
-
-            with col2:
-                # Dataset splits
-                try:
-                    # Calculate minimum required samples for validation and test sets
-                    min_samples_needed = input_length + output_length
-                    min_ratio_needed = min_samples_needed / data.shape[0]
-                    
-                    # Maximum training ratio ensuring validation and test sets have minimum samples
-                    max_train_ratio = 1.0 - (2 * min_ratio_needed)
-                    
-                    if max_train_ratio < 0.1:
-                        st.error(f"Not enough data for proper splitting with current parameters.")
-                        st.info(f"Data: {data.shape[0]} rows | Min samples needed per split: {min_samples_needed}")
-                        st.stop()  # Stop execution to prevent further issues
-                    
-                    # Training ratio input with adaptive default value
-                    default_train = min(0.8, max_train_ratio)  # Try for 80% but respect maximum
-                    train_ratio = st.number_input(
-                        "Training Set Ratio", 
-                        min_value=0.1, 
-                        max_value=float(max_train_ratio), 
-                        value=default_train,
-                        step=0.05 if max_train_ratio > 0.2 else 0.01,
-                        format="%.2f",
-                        key="linear_train_ratio",
-                        help = f"Maximum value: {max_train_ratio:.2f} (ensures validation and test sets have enough samples)"
-                    )
-                    
-                    # Calculate remaining ratio for validation and test
-                    remaining_ratio = 1.0 - train_ratio
-                    
-                    # Validation ratio input with proper constraints
-                    max_val_ratio = remaining_ratio - min_ratio_needed  # Ensure test set gets minimum
-                    default_val = min(0.1, max_val_ratio)  # Try for 10% but respect maximum
-                    val_ratio = st.number_input(
-                        "Validation Set Ratio", 
-                        min_value=float(min_ratio_needed), 
-                        max_value=float(max_val_ratio),
-                        value=default_val,
-                        step=0.05 if max_val_ratio > 0.2 else 0.01,
-                        format="%.2f",
-                        key="linear_val_ratio",
-                        help=f"Maximum value: {max_val_ratio:.2f} (ensures test set gets minimum samples)"
-                    )
-                    
-                    # Calculate and display test ratio
-                    test_ratio = 1.0 - train_ratio - val_ratio
-                    st.write(f"Test Set Ratio: {test_ratio:.2f}")
-
-                    # Display a note about statistical models
-                    if linear_model_type in ["Statistical SMA", "Statistical Exponential Smoothing", 
-                                        "Statistical Linear Regression", "ARIMA"]:
-                        st.info("Statistical models don't require training. They will be evaluated directly against the data.")
-
-                except Exception as e:
-                    st.error(f"Dataset splitting error: {str(e)}")
-                    st.warning("Please adjust input/output lengths or check your dataset dimensions.")
+                    seasonal_order = (P, D, Q, season_length)
+                else:
+                    seasonal_order = None
             
             col1, col2, col3 = st.columns(3)
-
             with col1:
-                # Learning rate and batch size
-                learning_rate = st.number_input("Learning Rate", min_value=0.0001, max_value=0.1, value=0.01, step=0.0001, 
-                                                format="%.4f", key="linear_lr_input")
-            
+                learning_rate = st.number_input("Learning Rate", min_value=0.0001, max_value=0.1, 
+                                                value=st.session_state.learning_rate, 
+                                                format="%.4f", step=0.0001)
             with col2:
-                batch_size = st.number_input("Batch Size", min_value=8, max_value=2048, value=64, step=64, key="linear_batch")
+                batch_size = st.number_input("Batch Size", min_value=1, max_value=2048, 
+                                             value=st.session_state.batch_size, step=64)
             
             with col3:
-                # Training parameters
-                epochs = st.number_input("Maximum Epochs", min_value=1, max_value=500, value=100, step=20, key="linear_epochs")
+                epochs = st.number_input("Maximum Epochs", min_value=1, max_value=1000, 
+                                         value=st.session_state.epochs, step=20)
             
             selected_model = {
                 "type": "linear",
@@ -1507,7 +1470,6 @@ def run():
         
     
     if model_type == "Custom":
-        st.subheader("Custom Model Selection")
         
         if not custom_models:
             st.info("No custom models found. Add custom model files to the 'custom_models' directory.")
@@ -1534,17 +1496,74 @@ def run():
                 
                 with col1:
                     # Model depth selection
-                    num_layers = st.number_input("Number of Layers", min_value=1, max_value=20, value=2, step=1, 
+                    num_layers = st.number_input("Number of Layers", min_value=1, max_value=20, 
+                                                 value=st.session_state.num_layers, step=1, 
                                                  key="custom_num_layers")
                     
                     # Hidden dimension selection
-                    hidden_dim = st.number_input("Hidden Dimension", min_value=32, max_value=2048, value=64, step=32, 
+                    hidden_dim = st.number_input("Hidden Dimension", min_value=32, max_value=2048, 
+                                                 value=st.session_state.hidden_dim, step=32, 
                                                  key="custom_hidden_dim_input")
+                with col2:
+                    # Early stopping parameters
+                    use_early_stopping = st.checkbox("Use Early Stopping", 
+                                                     value=st.session_state.use_early_stopping, key="custom_early_stopping")
+                    if use_early_stopping:
+                        patience = st.number_input("Early Stopping Patience", min_value=1, max_value=100,
+                                                value=st.session_state.patience, step=1, key="custom_patience")
+                    else:
+                        patience = 0
+                    
+                    # Learning rate scheduler
+                    use_lr_scheduler = st.checkbox("Use Learning Rate Scheduler", value=True, key="custom_lr_scheduler")
+                    lr_scheduler_type = None
+                    if use_lr_scheduler:
+                        lr_scheduler_type = st.selectbox(
+                            "Learning Rate Scheduler",
+                            ["ReduceLROnPlateau", "StepLR", "CosineAnnealingLR"],
+                            index=st.session_state.lr_scheduler_index,
+                            key="custom_scheduler_type"
+                        )
 
-                    # If Transformer model is selected, add num_heads parameter
-                    if model_info['architecture'].title() == "Transformer":
+                # If Transformer model is selected, add num_heads parameter
+                if model_info['architecture'].title() == "Transformer":
+        
+                    if st.session_state.datetime_column == True:
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            d_model = st.number_input("Model Dimension", min_value=32, max_value=2048, 
+                                                      value=st.session_state.d_model, step=32)
 
-                        d_model = st.number_input("Model Dimension", min_value=32, max_value=2048, value=64, step=32)
+                            # Calculate valid divisors of d_model
+                            divisors = [i for i in range(1, d_model + 1) if d_model % i == 0]
+                            
+                            # Default to a value close to 8 (common default) if possible
+                            default_index = min(range(len(divisors)), key=lambda i: abs(divisors[i] - 8))
+                            
+                            num_heads = st.selectbox(
+                                "Number of Attention Heads",
+                                options=divisors,
+                                index=default_index,
+                                help="For Transformer models, number of heads must divide the hidden dimension evenly."
+                            )
+
+                        with col2:
+                            st.session_state.uses_positional_encoding = st.checkbox(
+                                "Use Positional Encoding",
+                                value=True,
+                                help="Use positional encoding for Transformer models."
+                            )
+
+                            if st.session_state.uses_positional_encoding:
+                                st.session_state.positional_encoding_type = st.selectbox(
+                                    "Positional Encoding Type",
+                                    ["Sinusoidal", "Learned"],
+                                    index=st.session_state.positional_encoding_index,
+                                    help="Select the type of positional encoding to use."
+                                )
+                    else:
+                        d_model = st.number_input("Model Dimension", min_value=32, max_value=2048, 
+                                                  value=st.session_state.d_model, step=32)
 
                         # Calculate valid divisors of d_model
                         divisors = [i for i in range(1, d_model + 1) if d_model % i == 0]
@@ -1558,140 +1577,26 @@ def run():
                             index=default_index,
                             help="For Transformer models, number of heads must divide the hidden dimension evenly."
                         )
-                        if st.session_state.datetime_column == True:
-                            st.session_state.uses_positional_encoding = st.checkbox(
-                                "Use Positional Encoding",
-                                value=True,
-                                help="Use positional encoding for Transformer models."
-                            )
-                            if st.session_state.uses_positional_encoding:
-                                st.session_state.positional_encoding_type = st.selectbox(
-                                    "Positional Encoding Type",
-                                    ["Sinusoidal", "Learned"],
-                                    index=0,
-                                    help="Select the type of positional encoding to use."
-                                )
-                        else:
-                            st.session_state.uses_positional_encoding = False
-                            st.session_state.positional_encoding_type = "sinusoidal"
-                    else:
                         st.session_state.uses_positional_encoding = False
-                        num_heads = 8  # Default value for other models (won't be used)
+                        st.session_state.positional_encoding_type = "sinusoidal"
 
-                    # Input and output sequence length
-                    input_length = st.number_input("Input Sequence Length", min_value=1, max_value=1000, value=12, 
-                                                   step=3, key="custom_input_length")
-
-                    output_length = st.number_input("Output Sequence Length", min_value=1, max_value=1000, value=12, 
-                                                    step=3, key="custom_output_length")
-                    
-                with col2:
-                    # Loss function selection
-                    loss_function = st.selectbox(
-                        "Loss Function",
-                        loss_options,
-                        index=0,
-                        key="custom_loss"
-                    )
-
-                    selected_custom_loss = None
-                    if loss_function == "Custom Loss":
-                        selected_custom_loss = st.selectbox(
-                            "Select Custom Loss",
-                            list(custom_losses.keys()),
-                            format_func=lambda x: x.split(".")[-1]  # Show class name only
-                        )
-                        
-                        # Display loss information
-                        if selected_custom_loss:
-                            loss_class = custom_losses[selected_custom_loss]
-                            loss_info = get_loss_info(loss_class)
-                            st.info(f"**Description:** {loss_info['description']}")
-                    
-                    try:
-                        # Calculate minimum required samples for validation and test sets
-                        min_samples_needed = input_length + output_length
-                        min_ratio_needed = min_samples_needed / data.shape[0]
-                        
-                        # Maximum training ratio ensuring validation and test sets have minimum samples
-                        max_train_ratio = 1.0 - (2 * min_ratio_needed)
-                        
-                        if max_train_ratio < 0.1:
-                            st.error(f"Not enough data for proper splitting with current parameters.")
-                            st.info(f"Data: {data.shape[0]} rows | Min samples needed per split: {min_samples_needed}")
-                            st.stop()  # Stop execution to prevent further issues
-                        
-                        # Training ratio input with adaptive default value
-                        default_train = min(0.8, max_train_ratio)  # Try for 80% but respect maximum
-                        train_ratio = st.number_input(
-                            "Training Set Ratio", 
-                            min_value=0.1, 
-                            max_value=float(max_train_ratio), 
-                            value=default_train,
-                            step=0.05 if max_train_ratio > 0.2 else 0.01,
-                            format="%.2f",
-                            key="custom_train_ratio",
-                            help = f"Maximum value: {max_train_ratio:.2f} (ensures validation and test sets have enough samples)"
-                        )
-                        
-                        # Calculate remaining ratio for validation and test
-                        remaining_ratio = 1.0 - train_ratio
-                        
-                        # Validation ratio input with proper constraints
-                        max_val_ratio = remaining_ratio - min_ratio_needed  # Ensure test set gets minimum
-                        default_val = min(0.1, max_val_ratio)  # Try for 10% but respect maximum
-                        val_ratio = st.number_input(
-                            "Validation Set Ratio", 
-                            min_value=float(min_ratio_needed), 
-                            max_value=float(max_val_ratio),
-                            value=default_val,
-                            step=0.05 if max_val_ratio > 0.2 else 0.01,
-                            format="%.2f",
-                            key="custom_val_ratio",
-                            help=f"Maximum value: {max_val_ratio:.2f} (ensures test set gets minimum samples)"
-                        )
-                        
-                        # Calculate and display test ratio
-                        test_ratio = 1.0 - train_ratio - val_ratio
-                        st.write(f"Test Set Ratio: {test_ratio:.2f}")
-
-                    except Exception as e:
-                        st.error(f"Dataset splitting error: {str(e)}")
-                        st.warning("Please adjust input/output lengths or check your dataset dimensions.")
-                
-                # Early stopping parameters
-                use_early_stopping = st.checkbox("Use Early Stopping", value=True, key="custom_early_stopping")
-                if use_early_stopping:
-                    patience = st.number_input("Early Stopping Patience", min_value=1, max_value=100,
-                                               value=15, step=1, key="custom_patience")
                 else:
-                    patience = 0
-                
-                # Learning rate scheduler
-                use_lr_scheduler = st.checkbox("Use Learning Rate Scheduler", value=True, key="custom_lr_scheduler")
-                lr_scheduler_type = None
-                if use_lr_scheduler:
-                    lr_scheduler_type = st.selectbox(
-                        "Learning Rate Scheduler",
-                        ["ReduceLROnPlateau", "StepLR", "CosineAnnealingLR"],
-                        index=0,
-                        key="custom_scheduler_type"
-                    )
-                
-                # Training parameters
+                    st.session_state.uses_positional_encoding = False
+                    num_heads = 8  # Default value for other models (won't be used)
+
                 col1, col2, col3 = st.columns(3)
-                
                 with col1:
                     learning_rate = st.number_input("Learning Rate", min_value=0.0001, max_value=0.1, 
-                                                    value=0.001, step=0.0001, format="%.4f", key="custom_learning_rate")
-                    
+                                                    value=st.session_state.learning_rate, 
+                                                    format="%.4f", step=0.0001)
                 with col2:
-                    batch_size = st.number_input("Batch Size", min_value=8, max_value=2048, value=64, 
-                                                 step=64, key="custom_batch_size")
-                    
+                    batch_size = st.number_input("Batch Size", min_value=1, max_value=2048, 
+                                                value=st.session_state.batch_size, step=64)
+                
                 with col3:
-                    epochs = st.number_input("Maximum Epochs", min_value=1, max_value=500, value=100, 
-                                             step=20, key="custom_epochs")
+                    epochs = st.number_input("Maximum Epochs", min_value=1, max_value=1000, 
+                                            value=st.session_state.epochs, step=20)
+
                 
                 selected_model = {
                     "type": "custom_deep_learning",
@@ -1721,103 +1626,18 @@ def run():
 
             else:
                 # Linear model configuration
-                col1, col2 = st.columns(2)
-                st.session_state.uses_positional_encoding = False
-                
-                with col1:
-                    # Input and output sequence length
-                    input_length = st.number_input("Input Sequence Length", min_value=1, max_value=1000, 
-                                                   value=12, step=3, key="custom_linear_input_length")
-                    output_length = st.number_input("Output Sequence Length", min_value=1, max_value=1000, 
-                                                    value=12, step=3, key="custom_linear_output_length")
-                    
-                    # Loss function selection
-                    loss_function = st.selectbox(
-                        "Loss Function",
-                        loss_options,
-                        index=0,
-                        key="custom_linear_loss"
-                    )
-
-                    selected_custom_loss = None
-                    if loss_function == "Custom Loss":
-                        selected_custom_loss = st.selectbox(
-                            "Select Custom Loss",
-                            list(custom_losses.keys()),
-                            format_func=lambda x: x.split(".")[-1]  # Show class name only
-                        )
-                        
-                        # Display loss information
-                        if selected_custom_loss:
-                            loss_class = custom_losses[selected_custom_loss]
-                            loss_info = get_loss_info(loss_class)
-                            st.info(f"**Description:** {loss_info['description']}")
-                    
-                with col2:
-                    try:
-                        # Calculate minimum required samples for validation and test sets
-                        min_samples_needed = input_length + output_length
-                        min_ratio_needed = min_samples_needed / data.shape[0]
-                        
-                        # Maximum training ratio ensuring validation and test sets have minimum samples
-                        max_train_ratio = 1.0 - (2 * min_ratio_needed)
-                        
-                        if max_train_ratio < 0.1:
-                            st.error(f"Not enough data for proper splitting with current parameters.")
-                            st.info(f"Data: {data.shape[0]} rows | Min samples needed per split: {min_samples_needed}")
-                            st.stop()  # Stop execution to prevent further issues
-                        
-                        # Training ratio input with adaptive default value
-                        default_train = min(0.8, max_train_ratio)  # Try for 80% but respect maximum
-                        train_ratio = st.number_input(
-                            "Training Set Ratio", 
-                            min_value=0.1, 
-                            max_value=float(max_train_ratio), 
-                            value=default_train,
-                            step=0.05 if max_train_ratio > 0.2 else 0.01,
-                            format="%.2f",
-                            key="custom_linear_train_ratio",
-                            help = f"Maximum value: {max_train_ratio:.2f} (ensures validation and test sets have enough samples)"
-                        )
-                        
-                        # Calculate remaining ratio for validation and test
-                        remaining_ratio = 1.0 - train_ratio
-                        
-                        # Validation ratio input with proper constraints
-                        max_val_ratio = remaining_ratio - min_ratio_needed  # Ensure test set gets minimum
-                        default_val = min(0.1, max_val_ratio)  # Try for 10% but respect maximum
-                        val_ratio = st.number_input(
-                            "Validation Set Ratio", 
-                            min_value=float(min_ratio_needed), 
-                            max_value=float(max_val_ratio),
-                            value=default_val,
-                            step=0.05 if max_val_ratio > 0.2 else 0.01,
-                            format="%.2f",
-                            key="custom_linear_val_ratio",
-                            help=f"Maximum value: {max_val_ratio:.2f} (ensures test set gets minimum samples)"
-                        )
-                        
-                        # Calculate and display test ratio
-                        test_ratio = 1.0 - train_ratio - val_ratio
-                        st.write(f"Test Set Ratio: {test_ratio:.2f}")
-
-                    except Exception as e:
-                        st.error(f"Dataset splitting error: {str(e)}")
-                        st.warning("Please adjust input/output lengths or check your dataset dimensions.")
-                    
                 col1, col2, col3 = st.columns(3)
-                
                 with col1:
-                    learning_rate = st.number_input("Learning Rate", min_value=0.0001, max_value=0.1, value=0.001,
-                                                     step=0.0001, format="%.4f", key="custom_linear_learning_rate")
-                    
+                    learning_rate = st.number_input("Learning Rate", min_value=0.0001, max_value=0.1, 
+                                                    value=st.session_state.learning_rate, 
+                                                    format="%.4f", step=0.0001)
                 with col2:
-                    batch_size = st.number_input("Batch Size", min_value=8, max_value=2048, value=64,
-                                                  step=64, key="custom_linear_batch_size")
-                    
+                    batch_size = st.number_input("Batch Size", min_value=1, max_value=2048, 
+                                                value=st.session_state.batch_size, step=64)
+                
                 with col3:
-                    epochs = st.number_input("Maximum Epochs", min_value=1, max_value=500, value=100,
-                                             step=20, key="custom_linear_epochs")
+                    epochs = st.number_input("Maximum Epochs", min_value=1, max_value=1000, 
+                                            value=st.session_state.epochs, step=20)
                 
                 selected_model = {
                     "type": "custom_linear",
@@ -1868,11 +1688,38 @@ def run():
     st.header("Model Training")
     
     if st.button("Train Model"):
+        st.session_state.input_length = input_length
+        st.session_state.output_length = output_length
+        st.session_state.loss_function = loss_function
+        if selected_custom_loss is not None:
+            st.session_state.seletced_custom_loss = list(custom_losses.keys()).index(selected_custom_loss)
+        st.session_state.learning_rate = learning_rate
+        st.session_state.batch_size = batch_size
+        st.session_state.epochs = epochs
+        st.session_state.num_layers = num_layers
+        st.session_state.hidden_dim = hidden_dim
+        st.session_state.use_early_stopping = use_early_stopping
+        if use_early_stopping:
+            st.session_state.patience = patience
+        st.session_state.train_ratio = train_ratio
+        st.session_state.val_ratio = val_ratio
+        st.session_state.d_model = d_model
+        st.session_state.positional_encoding_index = pos_options.index(st.session_state.positional_encoding_type)
         st.session_state.trained_model = None
         st.session_state.predictions = None
         st.session_state.ground_truth = None
         st.session_state.training_history = None
         st.session_state.best_model_state = None
+
+        if builtin_model_type:
+            st.session_state.persistent_builtin_model_type = builtin_model_type
+        if dl_model_type is not None:
+            st.session_state.persistent_dl_model_type = dl_model_type
+        if linear_model_type is not None:
+            st.session_state.persistent_linear_model_type = linear_model_type
+        if lr_scheduler_type is not None:
+            st.session_state.lr_scheduler_index = lr_scheduler_options.index(lr_scheduler_type)
+  
         
         # Create containers for visualization
         training_container = st.container()
