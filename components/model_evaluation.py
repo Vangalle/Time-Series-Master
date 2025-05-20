@@ -100,14 +100,14 @@ def load_model_from_file(model_file):
         # Load the model data
         if model_file.name.endswith('_state.pt'):
             # Handle the alternative saving format
-            model_state = torch.load(model_file)
+            model_state = torch.load(model_file, weights_only=False)
             metadata_path = str(model_file).replace('_state.pt', '_metadata.json')
             with open(metadata_path, 'r') as f:
                 model_data = json.load(f)
             model_data['model_state'] = model_state
         else:
             # Standard format
-            model_data = torch.load(model_file)
+            model_data = torch.load(model_file, weights_only=False)
             
         # Extract timestamp from filename
         timestamp_pattern = r'_(\d{8}_\d{6})'

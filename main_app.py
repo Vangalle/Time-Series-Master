@@ -117,10 +117,11 @@ with st.sidebar:
             st.sidebar.warning("Please select data and variables first.")
     
     if st.sidebar.button("Model Evaluation", key="nav_eval"):
-        if st.session_state.trained_model is not None:
-            nav_to("model_evaluation")
-        else:
-            st.sidebar.warning("Please train a model first.")
+        nav_to("model_evaluation")
+        # if st.session_state.trained_model is not None:
+        #     nav_to("model_evaluation")
+        # else:
+        #     st.sidebar.warning("Please train a model first.")
     
     if st.session_state.page != "data_selection":
         
@@ -278,28 +279,29 @@ elif st.session_state.page == "model_evaluation":
     add_scroll_to_top()
     # Load and run the model evaluation component
     model_evaluation = import_component("model_evaluation")
-    if model_evaluation:
-        # We're dynamically importing and running the model_evaluation component
-        # The component will access and modify session state directly
-        model_evaluation.run()
-    else:
-        st.error("Failed to load model evaluation component.")
+    model_evaluation.run()
+    # if model_evaluation:
+    #     # We're dynamically importing and running the model_evaluation component
+    #     # The component will access and modify session state directly
+    #     model_evaluation.run()
+    # else:
+    #     st.error("Failed to load model evaluation component.")
         
-        # Display a simple message if the trained model exists
-        if st.session_state.trained_model is not None:
-            st.subheader("Model Evaluation (Not Available)")
-            st.write("The model evaluation component could not be loaded.")
-            st.write("However, a trained model exists in the session state.")
+    #     # Display a simple message if the trained model exists
+    #     if st.session_state.trained_model is not None:
+    #         st.subheader("Model Evaluation (Not Available)")
+    #         st.write("The model evaluation component could not be loaded.")
+    #         st.write("However, a trained model exists in the session state.")
             
-            if st.session_state.predictions is not None and st.session_state.ground_truth is not None:
-                st.subheader("Basic Performance Metrics")
+    #         if st.session_state.predictions is not None and st.session_state.ground_truth is not None:
+    #             st.subheader("Basic Performance Metrics")
                 
-                # Calculate basic metrics
-                mse = np.mean((st.session_state.predictions.flatten() - st.session_state.ground_truth.flatten()) ** 2)
-                mae = np.mean(np.abs(st.session_state.predictions.flatten() - st.session_state.ground_truth.flatten()))
+    #             # Calculate basic metrics
+    #             mse = np.mean((st.session_state.predictions.flatten() - st.session_state.ground_truth.flatten()) ** 2)
+    #             mae = np.mean(np.abs(st.session_state.predictions.flatten() - st.session_state.ground_truth.flatten()))
                 
-                col1, col2 = st.columns(2)
-                col1.metric("Mean Squared Error", f"{mse:.4f}")
-                col2.metric("Mean Absolute Error", f"{mae:.4f}")
-        else:
-            st.warning("No trained model available for evaluation.")
+    #             col1, col2 = st.columns(2)
+    #             col1.metric("Mean Squared Error", f"{mse:.4f}")
+    #             col2.metric("Mean Absolute Error", f"{mae:.4f}")
+    #     else:
+    #         st.warning("No trained model available for evaluation.")

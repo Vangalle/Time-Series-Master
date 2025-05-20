@@ -441,7 +441,7 @@ def run():
                         st.info(f"ℹ️ Distribution view will show {len(y_vars)} variable(s) at constant X position.")
                         
                         # Add jitter option for better visualization
-                        add_jitter = st.checkbox("Add horizontal jitter", value=True, 
+                        add_jitter = st.checkbox("Add horizontal jitter", value=False, 
                                             help="Adds small random horizontal offset to avoid overlapping points")
 
                 

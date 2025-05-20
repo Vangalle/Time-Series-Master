@@ -61,7 +61,7 @@ def load_custom_models(models_dir="custom_models"):
 
 def load_model_for_prediction(model_path):
     # Load using PyTorch's deserializer
-    model_data = torch.load(model_path)
+    model_data = torch.load(model_path, weights_only=False)
     
     # Get model configuration
     model_config = model_data['model_config']
