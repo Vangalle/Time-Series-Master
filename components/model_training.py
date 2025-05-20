@@ -5,18 +5,21 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 import json
-import time
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset, random_split
 from datetime import datetime
-import pickle
 import math
 import copy
-from pathlib import Path
 import platform
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, mean_absolute_percentage_error
+from statistical_models import (
+    StatisticalSMA, 
+    StatisticalExponentialSmoothing, 
+    StatisticalLinearRegression, 
+    ARIMAModel
+)
 
 # Import custom model and metrics loaders
 from custom_model_loader import load_custom_models, get_model_info
@@ -597,126 +600,6 @@ class DirectLinearProjectionNetwork(nn.Module):
             x = x. reshape(batch_size, self.output_length, self.output_dim)
         return x
 
-class SMA(nn.Module):
-    """
-    Simple Moving Average (SMA) model. Do not train, just used in prediction. 
-    Implementing an autoregressive way that uses the mean of last window_size timesteps as the prediction.
-
-    """
-    def __init__(self, input_dim, output_dim, input_length, output_length, window_size=5):
-        super(SMA, self).__init__()
-        self.output_dim = output_dim
-        self.output_length = output_length
-        self.window_size = min(window_size, input_length)
-        
-        # Projection layer to map from input dimensions to output dimensions
-        self.proj = nn.Linear(input_dim, output_dim)
-    
-    def forward(self, x):
-        # x shape: [batch_size, input_length, input_dim]
-        # Calculate moving average using the last window_size timesteps
-        x_window = x[:, -self.window_size:, :]
-        x_ma = torch.mean(x_window, dim=1)  # [batch_size, input_dim]
-        
-        # Project to output dimension if needed
-        x_ma_proj = self.proj(x_ma)  # [batch_size, output_dim]
-        
-        # Repeat the latest MA value for output_length steps
-        output = x_ma_proj.unsqueeze(1).repeat(1, self.output_length, 1)
-        
-        return output  # [batch_size, output_length, output_dim]
-
-class SimpleExponentialSmoothing(nn.Module):
-    def __init__(self, input_dim, output_dim, input_length, output_length, alpha=0.3):
-        super(SimpleExponentialSmoothing, self).__init__()
-        self.output_dim = output_dim
-        self.output_length = output_length
-        
-        # Alpha as a learnable parameter, constrained between 0 and 1
-        self.alpha = nn.Parameter(torch.tensor(alpha))
-        
-        # Projection for output dimension
-        self.proj = nn.Linear(input_dim, output_dim)
-    
-    def forward(self, x):
-        # x shape: [batch_size, input_length, input_dim]
-        batch_size, seq_length, _ = x.size()
-        
-        # Apply exponential smoothing
-        alpha = torch.sigmoid(self.alpha)  # Constrain between 0 and 1
-        
-        # Initialize with first observation
-        smoothed = x[:, 0, :].clone()
-        
-        # Iteratively apply exponential smoothing
-        for t in range(1, seq_length):
-            smoothed = alpha * x[:, t, :] + (1 - alpha) * smoothed
-        
-        # Project to output dimension
-        smoothed_proj = self.proj(smoothed)  # [batch_size, output_dim]
-        
-        # Repeat for output_length steps
-        output = smoothed_proj.unsqueeze(1).repeat(1, self.output_length, 1)
-        
-        return output  # [batch_size, output_length, output_dim]
-
-class LinearRegressionModel(nn.Module):
-    def __init__(self, input_dim, output_dim, input_length, output_length):
-        super(LinearRegressionModel, self).__init__()
-        self.output_dim = output_dim
-        self.output_length = output_length
-        
-        # Linear regression for each feature dimension
-        self.regression = nn.Linear(2, 1)  # slope and intercept
-        
-        # Projection to output dimension
-        self.proj = nn.Linear(input_dim, output_dim)
-    
-    def forward(self, x):
-        # x shape: [batch_size, input_length, input_dim]
-        batch_size, input_length, input_dim = x.size()
-        
-        # Time indices for regression
-        time_idx = torch.arange(0, input_length, dtype=torch.float32, device=x.device)
-        time_idx = time_idx.unsqueeze(0).unsqueeze(2).repeat(batch_size, 1, input_dim)
-        
-        # Stack x and time for regression
-        x_time = torch.stack([time_idx, x], dim=3)  # [batch_size, input_length, input_dim, 2]
-        
-        # Reshape for linear regression
-        x_time_flat = x_time.reshape(-1, 2)
-        
-        # Apply regression
-        pred_flat = self.regression(x_time_flat).squeeze(-1)
-        
-        # Reshape back
-        pred = pred_flat.reshape(batch_size, input_length, input_dim)
-        
-        # Get the coefficients for future predictions
-        last_time_idx = input_length - 1
-        future_time_idx = torch.arange(last_time_idx + 1, last_time_idx + self.output_length + 1, 
-                                      dtype=torch.float32, device=x.device)
-        
-        # For each feature, use the fitted line to predict future values
-        predictions = []
-        for i in range(self.output_length):
-            future_time = future_time_idx[i]
-            # Create inputs for each step in the future
-            future_inputs = torch.cat([
-                future_time.repeat(batch_size, 1),
-                torch.ones(batch_size, 1, device=x.device)
-            ], dim=1)
-            pred_i = self.regression(future_inputs).reshape(batch_size, 1, input_dim)
-            predictions.append(pred_i)
-        
-        # Concatenate predictions
-        output = torch.cat(predictions, dim=1)
-        
-        # Project to output dimension if needed
-        if input_dim != self.output_dim:
-            output = self.proj(output)
-        
-        return output  # [batch_size, output_length, output_dim]
 
 # Function to prepare time series data
 def prepare_time_series_data(data, input_vars, target_vars, input_length, output_length):
@@ -844,6 +727,7 @@ def prepare_time_series_data(data, input_vars, target_vars, input_length, output
     
     return X_data, X_pos, y_data, norm_params
 
+
 # Function to train the model
 # Modify the train_model function to accept position data
 def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, 
@@ -936,6 +820,72 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
     
     return best_model, training_history
 
+
+def train_non_trainable_models(model, train_loader, val_loader, criterion, device,
+                          loss_chart, progress_bar, status_text, uses_positional_encoding=False):
+    """
+    Handle statistical/non-trainable models that don't require optimization.
+    Instead of training, this function evaluates the model on training and validation data.
+    
+    Returns a dummy "best_model" state and training history for compatibility with the existing framework.
+    """
+    model.eval()  # Set model to evaluation mode
+    training_history = {
+        'train_loss': [],
+        'val_loss': []
+    }
+    
+    # Evaluate on training data to compute training loss
+    train_loss = 0.0
+    with torch.no_grad():
+        for batch in train_loader:
+            if uses_positional_encoding:
+                inputs, positions, targets = [b.to(device) for b in batch]
+                outputs = model(inputs, positions)
+            else:
+                inputs, targets = batch
+                inputs, targets = inputs.to(device), targets.to(device)
+                outputs = model(inputs)
+                
+            loss = criterion(outputs, targets)
+            train_loss += loss.item()
+    
+    train_loss /= len(train_loader)
+    training_history['train_loss'].append(train_loss)
+    
+    # Evaluate on validation data
+    val_loss = 0.0
+    with torch.no_grad():
+        for batch in val_loader:
+            if uses_positional_encoding:
+                inputs, positions, targets = [b.to(device) for b in batch]
+                outputs = model(inputs, positions)
+            else:
+                inputs, targets = batch
+                inputs, targets = inputs.to(device), targets.to(device)
+                outputs = model(inputs)
+                
+            loss = criterion(outputs, targets)
+            val_loss += loss.item()
+    
+    val_loss /= len(val_loader)
+    training_history['val_loss'].append(val_loss)
+    
+    # Update chart and status
+    loss_chart.add_rows(pd.DataFrame({
+        'Training Loss': [train_loss],
+        'Validation Loss': [val_loss]
+    }))
+    
+    status_text.text(f"Statistical model evaluation - Train: {train_loss:.6f}, Val: {val_loss:.6f}")
+    progress_bar.progress(1.0)  # Set progress to 100%
+    
+    # Return model state and history for compatibility
+    best_model = model.state_dict()
+    
+    return best_model, training_history
+
+
 # Function to evaluate the model
 def evaluate_model(model, test_loader, criterion, device, target_vars, norm_params,
                    uses_positional_encoding=False, custom_metrics=None):
@@ -1000,9 +950,11 @@ def evaluate_model(model, test_loader, criterion, device, target_vars, norm_para
     
     return test_loss, predictions, actuals, metrics_results
 
+
 # Function to denormalize the predictions and actual values
 def denormalize_data(data, mean, std):
     return data * std + mean
+
 
 # Function to save model and results
 def save_model_and_results(model_info, model_config, norm_params, 
@@ -1081,6 +1033,7 @@ def save_model_and_results(model_info, model_config, norm_params,
     
     return model_path, timestamp
 
+
 def add_scroll_to_top():
     """Add enhanced JavaScript to ensure scrolling to top of page."""
     js = '''
@@ -1100,6 +1053,7 @@ def add_scroll_to_top():
     </script>
     '''
     st.markdown(js, unsafe_allow_html=True)
+
 
 def run():
     """
@@ -1161,14 +1115,20 @@ def run():
     # Create tabs for different model categories
     # model_tabs = st.tabs(["Built-in Models", "Custom Models"])
 
-    model_type = st.selectbox("Select Model Type", ["Built-in", "Custom"])
+    # Replace the model_type selection (around line 775)
+    model_type = st.selectbox("Select Model Type", ["Built-in", "Custom"], 
+                            index=0 if st.session_state.persistent_model_type == "Built-in" else 1,
+                            key="model_type")
+    # Store the selection
+    st.session_state.persistent_model_type = model_type
     
     if model_type == "Built-in":  # Built-in Models
         st.subheader("Built-in Model Selection")
         
         # Use nested tabs for deep learning vs linear
         # builtin_tabs = st.tabs(["Deep Learning Models", "Linear Models"])
-        builtin_model_type = st.selectbox("Select Built-in Model Type", ["Deep Learning", "Linear"], key="builtin_model_type")
+        builtin_model_options = ["Deep Learning", "Linear"]
+        builtin_model_type = st.selectbox("Select Built-in Model Type", builtin_model_options)
         
         if builtin_model_type == "Deep Learning":
             col1, col2 = st.columns(2)
@@ -1231,7 +1191,6 @@ def run():
                 input_length = st.number_input("Input Sequence Length", min_value=1, max_value=1000, value=12, step=3)
 
                 output_length = st.number_input("Output Sequence Length", min_value=1, max_value=1000, value=12, step=3)
-
                 
             with col2:
                 # Loss function selection
@@ -1368,9 +1327,13 @@ def run():
             st.session_state.uses_positional_encoding = False
             
             linear_model_type = st.selectbox(
-                "Select Linear Model Type",
-                ["Direct Linear Projection Network"]
-            )
+                                    "Select Linear Model Type",
+                                    ["Direct Linear Projection Network", 
+                                    "Statistical SMA", 
+                                    "Statistical Exponential Smoothing", 
+                                    "Statistical Linear Regression",
+                                    "ARIMA"]
+                                )
             
             col1, col2 = st.columns(2)
             
@@ -1402,6 +1365,42 @@ def run():
                         loss_class = custom_losses[selected_custom_loss]
                         loss_info = get_loss_info(loss_class)
                         st.info(f"**Description:** {loss_info['description']}")
+                
+                # Additional parameters for statistical models
+                if linear_model_type == "Statistical SMA":
+                    window_size = st.slider("Window Size", min_value=2, max_value=min(20, input_length), 
+                                        value=min(5, input_length), step=1)
+
+                elif linear_model_type == "Statistical Exponential Smoothing":
+                    use_auto_alpha = st.checkbox("Auto-optimize smoothing parameter", value=True)
+                    if not use_auto_alpha:
+                        alpha = st.slider("Smoothing parameter (alpha)", min_value=0.0, max_value=1.0, 
+                                        value=0.3, step=0.05)
+                    else:
+                        alpha = None
+                    
+                    use_trend = st.checkbox("Include trend (Holt's method)", value=False)
+
+                elif linear_model_type == "ARIMA":
+                    # ARIMA order parameters
+                    p = st.slider("Autoregressive order (p)", min_value=0, max_value=5, value=1, step=1)
+                    d = st.slider("Difference order (d)", min_value=0, max_value=2, value=1, step=1)
+                    q = st.slider("Moving average order (q)", min_value=0, max_value=5, value=1, step=1)
+                    
+                    use_auto_arima = st.checkbox("Use Auto ARIMA (if available)", value=True)
+                    
+                    use_seasonal = st.checkbox("Include seasonal component", value=False)
+                    if use_seasonal:
+                        season_length = st.number_input("Season length (s)", min_value=2, value=12, step=1)
+                        
+                        # Seasonal parameters
+                        P = st.slider("Seasonal autoregressive order (P)", min_value=0, max_value=2, value=0, step=1)
+                        D = st.slider("Seasonal difference order (D)", min_value=0, max_value=1, value=0, step=1)
+                        Q = st.slider("Seasonal moving average order (Q)", min_value=0, max_value=2, value=0, step=1)
+                        
+                        seasonal_order = (P, D, Q, season_length)
+                    else:
+                        seasonal_order = None
 
             with col2:
                 # Dataset splits
@@ -1452,6 +1451,11 @@ def run():
                     test_ratio = 1.0 - train_ratio - val_ratio
                     st.write(f"Test Set Ratio: {test_ratio:.2f}")
 
+                    # Display a note about statistical models
+                    if linear_model_type in ["Statistical SMA", "Statistical Exponential Smoothing", 
+                                        "Statistical Linear Regression", "ARIMA"]:
+                        st.info("Statistical models don't require training. They will be evaluated directly against the data.")
+
                 except Exception as e:
                     st.error(f"Dataset splitting error: {str(e)}")
                     st.warning("Please adjust input/output lengths or check your dataset dimensions.")
@@ -1483,6 +1487,24 @@ def run():
                 "batch_size": batch_size,
                 "epochs": epochs
             }
+
+            # Store parameter values in the model config
+            if linear_model_type == "Statistical SMA":
+                model_params = {"window_size": window_size}
+            elif linear_model_type == "Statistical Exponential Smoothing":
+                model_params = {"alpha": alpha if not use_auto_alpha else None, "trend": use_trend}
+            elif linear_model_type == "ARIMA":
+                model_params = {
+                    "order": (p, d, q),
+                    "use_auto_arima": use_auto_arima,
+                    "seasonal_order": seasonal_order if use_seasonal else None
+                }
+            else:
+                model_params = {}
+
+            # Add to selected_model
+            selected_model["params"] = model_params
+        
     
     if model_type == "Custom":
         st.subheader("Custom Model Selection")
@@ -1813,9 +1835,10 @@ def run():
                     "epochs": epochs
                 }
 
-    
-    # Update model_params dictionary
-    if loss_function == "Custom Loss" and selected_custom_loss:
+    # Store the selection
+    model_params = selected_model
+
+    if model_params.get("loss_function") == "Custom Loss" and selected_custom_loss:
         model_params["custom_loss"] = selected_custom_loss
     
     # Custom metrics selection
@@ -2058,7 +2081,31 @@ def run():
                 st.info(f"Creating linear model with input dim {input_dim} and output dim {output_dim}")
                 
                 if model_params["type"] == "linear":
-                    model = DirectLinearProjectionNetwork(input_dim, output_dim, input_length, output_length)
+                    input_dim = input_feature_count
+                    output_dim = len(target_vars)
+                    
+                    st.info(f"Creating linear model with input dim {input_dim} and output dim {output_dim}")
+                    
+                    if model_params["model_name"] == "Direct Linear Projection Network":
+                        model = DirectLinearProjectionNetwork(input_dim, output_dim, input_length, output_length)
+                    elif model_params["model_name"] == "Statistical SMA":
+                        window_size = model_params.get("params", {}).get("window_size", 5)
+                        model = StatisticalSMA(input_dim, output_dim, input_length, output_length, window_size)
+                    elif model_params["model_name"] == "Statistical Exponential Smoothing":
+                        alpha = model_params.get("params", {}).get("alpha", None)
+                        trend = model_params.get("params", {}).get("trend", False)
+                        model = StatisticalExponentialSmoothing(input_dim, output_dim, input_length, output_length, 
+                                                            alpha=alpha, trend=trend)
+                    elif model_params["model_name"] == "Statistical Linear Regression":
+                        model = StatisticalLinearRegression(input_dim, output_dim, input_length, output_length)
+                    elif model_params["model_name"] == "ARIMA":
+                        order = model_params.get("params", {}).get("order", (1, 1, 1))
+                        seasonal_order = model_params.get("params", {}).get("seasonal_order", None)
+                        use_auto_arima = model_params.get("params", {}).get("use_auto_arima", True)
+                        model = ARIMAModel(input_dim, output_dim, input_length, output_length, 
+                                        order=order, seasonal_order=seasonal_order)
+                        if use_auto_arima:
+                            st.info("Using Auto ARIMA to determine best parameters")
                 else:
                     # Custom linear model
                     model_class = model_params["model_class"]
@@ -2078,36 +2125,52 @@ def run():
                 loss_class = custom_losses[model_params["custom_loss"]]
                 criterion = loss_class()
             
-            # Set optimizer
-            optimizer = optim.Adam(model.parameters(), lr=model_params["learning_rate"])
-            
-            # Set scheduler
-            scheduler = None
-            if model_params.get("use_lr_scheduler", False):
-                if model_params["lr_scheduler_type"] == "ReduceLROnPlateau":
-                    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-                        optimizer, mode='min', factor=0.5, patience=5
-                    )
-                elif model_params["lr_scheduler_type"] == "StepLR":
-                    scheduler = optim.lr_scheduler.StepLR(
-                        optimizer, step_size=10, gamma=0.5
-                    )
-                elif model_params["lr_scheduler_type"] == "CosineAnnealingLR":
-                    scheduler = optim.lr_scheduler.CosineAnnealingLR(
-                        optimizer, T_max=model_params["epochs"]
-                    )
-            
-            progress_bar.progress(20)
-            status_text.text("Training model...")
-            
-            # Train model
-            epochs = model_params["epochs"]
-            patience = model_params.get("patience", 15) if model_params.get("use_early_stopping", True) else float('inf')
-            
-            best_model_state, training_history = train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, 
-                                                             device, epochs, patience, loss_chart, progress_bar, status_text, 
-                                                             uses_positional_encoding=st.session_state.uses_positional_encoding, 
-                                                             verbose=False)
+            # Check if this is a statistical model (no trainable parameters)
+            st.session_state.is_statistical_model = model_params["model_name"] in [
+                "Statistical SMA", "Statistical Exponential Smoothing", 
+                "Statistical Linear Regression", "ARIMA"
+            ]
+
+            if st.session_state.is_statistical_model:
+                # For statistical models, we don't need an optimizer or scheduler
+                optimizer = None
+                scheduler = None
+                
+                # Use the non-trainable model function for evaluation
+                status_text.text("Evaluating statistical model (no training required)...")
+                best_model_state, training_history = train_non_trainable_models(
+                    model, train_loader, val_loader, criterion, device,
+                    loss_chart, progress_bar, status_text, 
+                    uses_positional_encoding=st.session_state.uses_positional_encoding
+                )
+            else:
+                # For trainable models, create optimizer and use the original training function
+                optimizer = optim.Adam(model.parameters(), lr=model_params["learning_rate"])
+                
+                # Set scheduler
+                scheduler = None
+                if model_params.get("use_lr_scheduler", False):
+                    if model_params["lr_scheduler_type"] == "ReduceLROnPlateau":
+                        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+                            optimizer, mode='min', factor=0.5, patience=5
+                        )
+                    elif model_params["lr_scheduler_type"] == "StepLR":
+                        scheduler = optim.lr_scheduler.StepLR(
+                            optimizer, step_size=10, gamma=0.5
+                        )
+                    elif model_params["lr_scheduler_type"] == "CosineAnnealingLR":
+                        scheduler = optim.lr_scheduler.CosineAnnealingLR(
+                            optimizer, T_max=model_params["epochs"]
+                        )
+                
+                # Train model
+                epochs = model_params["epochs"]
+                patience = model_params.get("patience", 15) if model_params.get("use_early_stopping", True) else float('inf')
+                
+                best_model_state, training_history = train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, 
+                                                            device, epochs, patience, loss_chart, progress_bar, status_text, 
+                                                            uses_positional_encoding=st.session_state.uses_positional_encoding, 
+                                                            verbose=False)
             
             # Mark training as complete
             status_text.success("Training complete!")
@@ -2196,7 +2259,7 @@ def run():
             st.code(traceback.format_exc())
     
     # Results section (only show if model has been trained)
-    if st.session_state.trained_model is not None:
+    if st.session_state.trained_model is not None and st.session_state.is_statistical_model is None:
         st.header("Training Results")
         
         st.subheader("Training Analysis")
@@ -2234,6 +2297,8 @@ def run():
         ax.legend()
         ax.grid(True, alpha=0.3)
         st.pyplot(fig)
+
+    if st.session_state.trained_model is not None:
         
         # Show metrics
         if hasattr(st.session_state, 'metrics_results'):

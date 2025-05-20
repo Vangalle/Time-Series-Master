@@ -437,8 +437,8 @@ def run():
         
         # Additional options based on plot type
         if plot_type == "Time Series Plot":
-            plot_window = st.slider(
-                "Window Size (0 for all data)",
+            plot_start = st.slider(
+                "Start index for plot",
                 0, len(all_pred_values), 0
             )
         
@@ -454,10 +454,10 @@ def run():
             fig, ax = plt.subplots(figsize=(12, 6))
             
             if plot_type == "Time Series Plot":
-                if plot_window > 0:
-                    # Plot a window of the data
-                    plot_start = max(0, len(all_pred_values) - plot_window)
+                if plot_start > 0:
                     plot_end = len(all_pred_values)
+
+                    st.info(f"Window Size: {plot_end-plot_start}")
 
                     ax.plot(range(plot_start, plot_end), all_true_values[plot_start:plot_end], label='Actual')
                     ax.plot(range(plot_start, plot_end), all_pred_values[plot_start:plot_end], label='Predicted', alpha=0.7)

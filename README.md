@@ -261,7 +261,8 @@ Time_Series_Master/
 ├── components/                 # Application components
 │   ├── data_loader.py          # Data selection component
 │   ├── model_training.py       # Model training component
-│   └── model_evaluation.py     # Model evaluation component
+│   ├── model_evaluation.py     # Model evaluation component
+│   └── statistical_models.py   # Model evaluation component
 ├── custom_models/              # Directory for custom model definitions
 │   └── example_models.py       # Example custom models (auto-generated)
 ├── custom_metrics/             # Directory for custom metric definitions

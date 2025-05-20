@@ -58,6 +58,39 @@ if 'uses_positional_encoding' not in st.session_state:
     st.session_state.uses_positional_encoding = False
 if 'positional_encoding_type' not in st.session_state:
     st.session_state.positional_encoding_type = "Sinusoidal"
+if 'is_statistical_model' not in st.session_state:
+    st.session_state.is_statistical_model = None
+if 'persistent_model_type' not in st.session_state:
+    st.session_state.persistent_model_type = "Built-in"
+if 'persistent_builtin_model_type' not in st.session_state:
+    st.session_state.persistent_builtin_model_type = "Deep Learning"
+if 'persistent_dl_model_type' not in st.session_state:
+    st.session_state.persistent_dl_model_type = "LSTM"
+if 'persistent_linear_model_type' not in st.session_state:
+    st.session_state.persistent_linear_model_type = "Direct Linear Projection Network"
+if "persistent_params" not in st.session_state:
+    st.session_state.persistent_params = {
+        "input_length": 12,
+        "output_length": 12,
+        "hidden_dim": 64,
+        "train_ratio": 0.8,
+        "val_ratio": 0.1,
+        "loss_function": "L2Loss",
+        "learning_rate": 0.001,
+        "batch_size": 64,
+        "patience": 15,
+        "epochs": 100,
+        "num_layers": 2
+    }
+
+if 'persistent_model_type' not in st.session_state:
+    st.session_state.persistent_model_type = "Built-in"
+if 'persistent_builtin_model_type' not in st.session_state:
+    st.session_state.persistent_builtin_model_type = "Deep Learning"
+if 'persistent_dl_model_type' not in st.session_state:
+    st.session_state.persistent_dl_model_type = "LSTM"
+if 'persistent_linear_model_type' not in st.session_state:
+    st.session_state.persistent_linear_model_type = "Direct Linear Projection Network"
 
 # Functions to navigate between pages
 def nav_to(page):
